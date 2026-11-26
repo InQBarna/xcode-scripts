@@ -36,6 +36,16 @@ platform :ios do
 
   end
 
+  desc "Renews expired certificates and regenerates the provisioning profiles (development, adhoc, appstore)"
+  desc "Run once a year when certificates expire. Needs write access to the match repo and dev portal access"
+  lane :renew_certs do
+    %w[development adhoc appstore].each do |type|
+      match(type: type,
+            renew_expired_certs: true,
+            force: true)
+    end
+  end
+
 end
 
 def iq_firebase(appname:, schemename:, targetname:, xcprojname:, bundleid:, firebaseid:, testers_cs:)
