@@ -23,6 +23,7 @@ Breaking: generated projects are now SPM-only, and the repo moved to GitHub.
 - `scripts/doctor.sh` (from `templates/doctor.sh`) checks Xcode, simulator, Ruby, gems, shared scheme and coverage, fastlane files, signing and CI, a committed `.p8` key, and prints a fix for each problem (`--offline` skips network checks).
 - `.github/workflows/versions.yml` (weekly): smoke-tests the newest Ruby and opens a PR bumping `versions.env` when it passes, or an issue when it fails; `tests/check-actions.sh` reports outdated actions in the templates.
 - New lanes: `check_certs` (expiry report, `strict:true` for CI), `sync_devices` (devices.txt from the portal with the API key), `lint` (SwiftLint / SwiftFormat), and `bump_version` in the generated Fastfile (`iq_bump_version`). `tests/lanes.sh` tests them with stubs; `tests/smoke.sh` runs `bump_version` for real.
+- `setup.sh` installs the Ruby even when Homebrew's `ruby-build` is too old to know it (falls back to upstream `ruby-build` as an rbenv plugin); found by the first run on a fresh hosted runner.
 - `setup_match.sh`: fixed inverted check that tried to re-import the common Fastfile when already present.
 
 ## 1.x

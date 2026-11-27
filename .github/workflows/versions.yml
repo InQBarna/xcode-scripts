@@ -25,8 +25,9 @@ jobs:
       - name: Find the newest stable Ruby
         id: ruby
         run: |
-          brew install rbenv ruby-build > /dev/null 2>&1 || true
-          brew upgrade ruby-build > /dev/null 2>&1 || true
+          brew install rbenv > /dev/null 2>&1 || true
+          # Upstream ruby-build as an rbenv plugin: Homebrew's can lag behind Ruby releases
+          git clone -q --depth 1 https://github.com/rbenv/ruby-build.git "$(rbenv root)/plugins/ruby-build"
           latest=$(rbenv install -l | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -n 1)
           current=$(grep -E '^RUBY_VERSION=' versions.env | cut -d= -f2)
           echo "latest=$latest" >> "$GITHUB_OUTPUT"

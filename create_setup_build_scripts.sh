@@ -96,8 +96,16 @@ fi
 RUBY_VERSION=`tr -d '[:space:]' < .ruby-version` || { echo "[SETUP.SH] Missing .ruby-version"; exit 1; }
 which gem | grep ".rbenv" || eval "$(rbenv init -)"
 if ! rbenv versions --bare | grep -qx "$RUBY_VERSION"; then
-    # An old ruby-build does not know recent rubies
-    rbenv install -s "$RUBY_VERSION" || { brew upgrade ruby-build; rbenv install -s "$RUBY_VERSION" || exit 1; }
+    # ruby-build must know the Ruby: try the installed one, then a newer Homebrew one, then upstream's
+    # (Homebrew's ruby-build can lag behind Ruby releases; upstream is added as an rbenv plugin, which takes precedence)
+    rbenv install -s "$RUBY_VERSION" 2>/dev/null || {
+        brew upgrade ruby-build > /dev/null 2>&1
+        rbenv install -s "$RUBY_VERSION" 2>/dev/null || {
+            PLUGIN="$(rbenv root)/plugins/ruby-build"
+            if [ -d "$PLUGIN/.git" ]; then git -C "$PLUGIN" pull --ff-only -q; else git clone -q --depth 1 https://github.com/rbenv/ruby-build.git "$PLUGIN" || exit 1; fi
+            rbenv install -s "$RUBY_VERSION" || exit 1
+        }
+    }
 fi
 rbenv rehash
 ruby --version | grep -F "ruby $RUBY_VERSION" || exit 1
