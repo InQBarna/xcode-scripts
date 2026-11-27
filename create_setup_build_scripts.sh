@@ -53,19 +53,17 @@ EOF
 )
 echo "$GEMFILE" > Gemfile
 
-# Ruby: nothing is pinned in this repo. A new project gets the latest stable Ruby that rbenv/ruby-build knows
-# (override with XCODE_SCRIPTS_RUBY=x.y.z) and owns that choice from then on in its committed .ruby-version.
-# Bundler is whatever ships with that Ruby (Gemfile.lock records the version afterwards).
+# Ruby for a new project: XCODE_SCRIPTS_RUBY if set, else the version in versions.env (the one the smoke test last
+# passed with, bumped automatically by a weekly workflow). It is written to the project's committed .ruby-version,
+# which the project owns from then on. Bundler is whatever ships with that Ruby (Gemfile.lock records it).
 if [[ ! -f .ruby-version ]]; then
     if [[ -n "$XCODE_SCRIPTS_RUBY" ]]; then
         echo "$XCODE_SCRIPTS_RUBY" > .ruby-version
     else
-        which rbenv > /dev/null || brew install rbenv || exit 1
-        echo "[CREATE_SETUP_BUILD_SCRIPTS.SH] Updating ruby-build to find the latest stable Ruby"
-        brew upgrade ruby-build > /dev/null 2>&1 || true
-        LATEST_RUBY=`rbenv install -l 2>/dev/null | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -n 1`
-        [[ -n "$LATEST_RUBY" ]] || { echo "[CREATE_SETUP_BUILD_SCRIPTS.SH] Could not find the latest Ruby, set XCODE_SCRIPTS_RUBY=x.y.z"; exit 1; }
-        echo "$LATEST_RUBY" > .ruby-version
+        VERSIONS_ENV="$SCRIPT_DIR/versions.env"
+        [[ -f "$VERSIONS_ENV" ]] || { VERSIONS_ENV="$(mktemp -d)/versions.env"; curl -fsSL "$XCODE_SCRIPTS_RAW/versions.env" > "$VERSIONS_ENV" || { echo "[CREATE_SETUP_BUILD_SCRIPTS.SH] Could not download versions.env, set XCODE_SCRIPTS_RUBY=x.y.z"; exit 1; }; }
+        grep -E '^RUBY_VERSION=[0-9.]+$' "$VERSIONS_ENV" | cut -d= -f2 > .ruby-version
+        [[ -s .ruby-version ]] || { echo "[CREATE_SETUP_BUILD_SCRIPTS.SH] No RUBY_VERSION in versions.env, set XCODE_SCRIPTS_RUBY=x.y.z"; rm -f .ruby-version; exit 1; }
     fi
 fi
 RUBY_VERSION=`tr -d '[:space:]' < .ruby-version`

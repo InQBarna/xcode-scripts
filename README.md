@@ -131,15 +131,15 @@ The generator creates `.xcode-version` with your current Xcode. `scripts/build.s
 
 ## Versions
 
-This repo pins nothing, so it cannot go stale:
+A new project gets a current, **tested** set of versions, and this repo keeps them current automatically:
 
-- **Ruby**: a new project gets the latest stable Ruby known to ruby-build, written to its `.ruby-version` (`XCODE_SCRIPTS_RUBY=x.y.z` to choose another). From then on the project owns it: update `.ruby-version` and run `./scripts/setup.sh`. `scripts/doctor.sh` warns when it is close to end of life.
+- **Ruby**: `versions.env` holds the version the smoke test last passed with (today 4.0.10). The generator writes it to the project's `.ruby-version` (`XCODE_SCRIPTS_RUBY=x.y.z` to choose another). From then on the project owns it: update `.ruby-version` and run `./scripts/setup.sh`. `scripts/doctor.sh` warns when it is close to end of life.
 - **Bundler / gems / fastlane**: bundler is the one that ships with that Ruby; `Gemfile.lock` (commit it) pins everything for the project. Dependabot (generated `.github/dependabot.yml`) proposes updates.
 - **Xcode**: `.xcode-version`, created from the Xcode you generate with.
 - **GitHub runners / actions**: `macos-latest`; action versions are kept fresh by the generated Dependabot config.
 - **CommonFastfile**: the only thing versioned here, with git tags; projects import `~> 2.0`.
 
-How this repo notices that "latest" broke: its CI runs the smoke test every Monday against whatever is newest, and opens a `versions` issue if it fails or if an action in `templates/` is behind (`tests/check-actions.sh`). Last verified: Ruby 4.0.10, bundler 4.0.20, fastlane 2.242.0, Xcode 26.4.
+How `versions.env` stays current without anybody choosing versions: `.github/workflows/versions.yml` runs every Monday, tries the newest stable Ruby with the smoke test, and **opens a PR bumping `versions.env` if it passes** or **an issue if it fails**. It also opens an issue when an action used in `templates/` has a newer major (`tests/check-actions.sh`). (The repo setting "Allow GitHub Actions to create and approve pull requests" must be on.) Last verified together: Ruby 4.0.10, bundler 4.0.20, fastlane 2.242.0, Xcode 26.4.
 
 ## Developing this repo
 

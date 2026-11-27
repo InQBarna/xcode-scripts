@@ -2,10 +2,6 @@ name: CI
 
 on:
   pull_request:
-  schedule:
-    # Weekly: nothing in this repo pins Ruby/bundler/fastlane/runner, so this run is the early warning that the
-    # newest versions still work (and that the actions in templates/ are not outdated)
-    - cron: "0 6 * * 1"
   push:
     branches: [master, v2]
 
@@ -34,33 +30,3 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - run: tests/smoke.sh
-
-  actions-freshness:
-    if: github.event_name == 'schedule'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-      - run: tests/check-actions.sh
-        env:
-          GH_TOKEN: ${{ github.token }}
-
-  report:
-    # One open issue with the failing run, instead of a silent red badge nobody looks at
-    if: failure() && github.event_name == 'schedule'
-    needs: [smoke, actions-freshness]
-    runs-on: ubuntu-latest
-    permissions:
-      issues: write
-    steps:
-      - env:
-          GH_TOKEN: ${{ github.token }}
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: |
-          existing=$(gh issue list --repo "$GITHUB_REPOSITORY" --label versions --state open --json number --jq '.[0].number')
-          body="The weekly check failed: $RUN_URL. Either the newest Ruby/fastlane/Xcode broke the generated setup (smoke job) or an action used in templates/ has a newer major (actions-freshness job)."
-          if [ -n "$existing" ]; then
-            gh issue comment "$existing" --repo "$GITHUB_REPOSITORY" --body "$body"
-          else
-            gh label create versions --repo "$GITHUB_REPOSITORY" --color FBCA04 --description "Dependency / version freshness" 2>/dev/null || true
-            gh issue create --repo "$GITHUB_REPOSITORY" --label versions --title "Weekly version check failed" --body "$body"
-          fi
