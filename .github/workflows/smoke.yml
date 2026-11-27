@@ -24,6 +24,14 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  lanes:
+    # Fast: portal and lint lanes with stubs (tests/lanes.sh)
+    runs-on: macos-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - run: tests/lanes.sh
+
   smoke:
     runs-on: macos-latest
     timeout-minutes: 60

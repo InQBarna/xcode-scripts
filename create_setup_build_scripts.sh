@@ -260,9 +260,9 @@ __IMPORT_COMMON_FASTFILE__
 default_platform(:ios)
 
 before_all do |lane, options|
-  # build and test only compile, they don't need App Store Connect access.
+  # These lanes work offline, they don't need App Store Connect access (every other lane gets the key).
   # On CI set ASC_KEY_ID, ASC_ISSUER_ID and ASC_KEY_P8 (p8 file content) instead of committing the key.
-  unless [:build, :test].include?(lane)
+  unless [:build, :test, :lint, :bump_version].include?(lane)
     iq_asc_api_key(key_id: "",
                    issuer_id: "",
                    key_filepath: "./fastlane/AuthKey_XXXXXXX.p8")
@@ -284,6 +284,14 @@ platform :ios do
             test_target: "###",
             ui_test_target: "###",
             concurrent_ui_tests: options[:concurrent_ui_tests] != false)
+  end
+
+  desc "Bumps the marketing version and commits it: bump_version bump:patch|minor|major, or bump_version version:1.2.3"
+  lane :bump_version do |options|
+    iq_bump_version(xcprojname: "###",
+                    targetname: "###",
+                    bump: options[:bump],
+                    version: options[:version])
   end
 
   lane :renuke do

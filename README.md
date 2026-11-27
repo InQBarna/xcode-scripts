@@ -18,6 +18,10 @@ It generates the scripts and fastlane setup so every project builds, tests and s
 | `update_devices_and_profiles` | Registers `fastlane/devices.txt` on the dev portal and regenerates development/adhoc/appstore profiles with match |
 | `install_profiles` | Installs existing profiles read-only (no dev portal access needed) |
 | `renew_certs` | Renews expired certificates and regenerates profiles. `dry_run:true` only lists what would be deleted |
+| `check_certs` | Lists certificates and match profiles with their expiry (`warn_days:30`). `strict:true` fails when something is expired, expiring or invalid: run it weekly on CI so renewal is never a surprise. Read only, needs just the API key |
+| `sync_devices` | Writes the enabled iOS devices of the developer portal to `fastlane/devices.txt` and shows what changed (`dry_run:true` to only look). Uses the API key, so no username/password needed |
+| `lint` | Runs SwiftLint (`--strict`, `strict:false` to allow warnings) and SwiftFormat (`--lint`, nothing is modified) when configured/installed. Fails if a tool has a config file but is not installed |
+| `bump_version` | Generated in your Fastfile: `bump_version bump:patch\|minor\|major` or `bump_version version:1.2.3`; changes the marketing version and commits it |
 
 Helper methods called from the lanes of your project's Fastfile (the generator creates them):
 
@@ -143,8 +147,10 @@ How `versions.env` stays current without anybody choosing versions: `.github/wor
 
 ## Developing this repo
 
+`tests/lanes.sh` is a fast test (a minute, no Xcode, no Apple account) of the portal and lint lanes with stubbed Spaceship and lint tools.
+
 `tests/smoke.sh` is an end-to-end test: it generates a throwaway iOS project (`tests/fixtures/SampleApp`, with XcodeGen), runs the generator on it unattended and checks the result:
-generated files, `scripts/build.sh`, unit + UI tests, junit, coverage, a warning failing the build, and a failing test still writing its report. It takes a few minutes and needs macOS, Xcode with an iOS simulator, brew and network. It also runs in GitHub Actions (`smoke.yml`) on PRs that touch the generator, lanes, templates, samples, tests or `versions.env`; `lint.yml` runs syntax checks on every PR.
+generated files, `bump_version`, `scripts/build.sh`, unit + UI tests, junit, coverage, a warning failing the build, and a failing test still writing its report. It takes a few minutes and needs macOS, Xcode with an iOS simulator, brew and network. It also runs in GitHub Actions (`smoke.yml`) on PRs that touch the generator, lanes, templates, samples, tests or `versions.env`; `lint.yml` runs syntax checks on every PR.
 
 ```
 tests/smoke.sh                  # SMOKE_KEEP=1 keeps the temporary project for debugging

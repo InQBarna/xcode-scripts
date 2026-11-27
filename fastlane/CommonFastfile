@@ -67,6 +67,25 @@ platform :ios do
     end
   end
 
+  desc "Lists the certificates and the match provisioning profiles with their expiry dates"
+  desc "warn_days:30 (default) marks what expires soon; strict:true makes the lane fail when something is expired, expiring or invalid (for a scheduled CI job)"
+  desc "Read only: needs the App Store Connect API key, no match repo access"
+  lane :check_certs do |options|
+    iq_check_certs(warn_days: (options[:warn_days] || 30).to_i, strict: iq_true?(options[:strict]))
+  end
+
+  desc "Writes the devices registered on the developer portal to fastlane/devices.txt (enabled iOS devices)"
+  desc "Uses the App Store Connect API key. dry_run:true only shows what would change. Then run update_devices_and_profiles"
+  lane :sync_devices do |options|
+    iq_sync_devices(dry_run: iq_true?(options[:dry_run]))
+  end
+
+  desc "Runs SwiftLint and SwiftFormat (lint mode, nothing is modified) when they are configured/installed"
+  desc "strict:false lets SwiftLint warnings pass. Skips with a message when the project uses neither"
+  lane :lint do |options|
+    iq_lint(strict: options[:strict].nil? ? true : iq_true?(options[:strict]))
+  end
+
 end
 
 def iq_firebase(appname:, schemename:, targetname:, xcprojname:, bundleid:, firebaseid:, testers_cs:)
@@ -511,4 +530,201 @@ def iq_asc_api_key(key_id: '', issuer_id: '', key_filepath: nil)
     key_filepath: content ? nil : iq_resolve_path(key_filepath),
     in_house: false
   )
+end
+
+
+# -----------------------------------------------------------------------------
+# Certificates, devices, version, lint (used by the lanes above and the generated Fastfile)
+# -----------------------------------------------------------------------------
+
+def iq_true?(value)
+  value == true || value.to_s.downcase == 'true'
+end
+
+# Spaceship (App Store Connect API) authenticated with the key configured by iq_asc_api_key in before_all
+def iq_connect_token
+  Spaceship::ConnectAPI.token = Spaceship::ConnectAPI::Token.from(hash: lane_context[SharedValues::APP_STORE_CONNECT_API_KEY])
+end
+
+def iq_match_identifiers
+  require 'match'
+  config = FastlaneCore::Configuration.create(Match::Options.available_options, {})
+  config.load_configuration_file('Matchfile')
+  identifiers = Array(config[:app_identifier])
+  UI.user_error!('No app_identifier found in Matchfile') if identifiers.empty?
+  identifiers
+end
+
+# :expired, :expiring (within warn_days) or :ok, and the days left (negative when expired)
+def iq_expiry_status(expiration, warn_days: 30, now: Time.now)
+  require 'time'
+  expires = expiration.is_a?(Time) ? expiration : Time.parse(expiration.to_s)
+  days = ((expires - now) / 86_400).floor
+  status = if expires <= now then :expired elsif days <= warn_days then :expiring else :ok end
+  [status, days]
+end
+
+def iq_check_certs(warn_days:, strict:)
+  iq_connect_token
+  identifiers = iq_match_identifiers
+  names = identifiers.flat_map { |id| %w[Development AdHoc AppStore].map { |type| /\Amatch #{type} #{Regexp.escape(id)}( \d+)?\z/ } }
+
+  rows = []
+  Spaceship::ConnectAPI::Certificate.all.each do |cert|
+    status, days = iq_expiry_status(cert.expiration_date, warn_days: warn_days)
+    rows << { kind: 'certificate', name: "#{cert.display_name || cert.name} (#{cert.certificate_type})", expires: cert.expiration_date, status: status, days: days }
+  end
+  Spaceship::ConnectAPI::Profile.all.select { |p| names.any? { |n| n.match?(p.name.to_s) } }.each do |profile|
+    status, days = iq_expiry_status(profile.expiration_date, warn_days: warn_days)
+    status = :invalid if profile.profile_state.to_s == 'INVALID'
+    rows << { kind: 'profile', name: profile.name, expires: profile.expiration_date, status: status, days: days }
+  end
+
+  UI.user_error!('No certificates or profiles found for the Matchfile app identifiers') if rows.empty?
+  rows.sort_by { |r| [r[:kind], r[:days]] }.each do |r|
+    line = format('%-12s %-60s expires %s (%s)', r[:kind], r[:name], r[:expires].to_s[0, 10],
+                  r[:status] == :invalid ? 'INVALID' : (r[:days] < 0 ? "expired #{-r[:days]} days ago" : "#{r[:days]} days left"))
+    case r[:status]
+    when :ok then UI.success(line)
+    when :expiring then UI.important(line)
+    else UI.error(line)
+    end
+  end
+  problems = rows.reject { |r| r[:status] == :ok }
+  if problems.empty?
+    UI.success("Nothing expires in the next #{warn_days} days")
+  else
+    UI.important("#{problems.count} certificate(s)/profile(s) expired, expiring in #{warn_days} days or invalid. Run `fastlane renew_certs`")
+    UI.user_error!("Certificates need renewal") if strict
+  end
+  rows
+end
+
+# Content of fastlane/devices.txt (the format of register_devices): header + "udid<TAB>name", sorted by name
+def iq_devices_file_content(devices)
+  lines = devices.sort_by { |d| [d[:name].to_s.downcase, d[:udid].to_s] }.map { |d| "#{d[:udid]}\t#{d[:name].to_s.gsub(/\s+/, ' ').strip}" }
+  (["Device ID\tDevice Name"] + lines).join("\n") + "\n"
+end
+
+def iq_sync_devices(dry_run: false, platforms: ['IOS'])
+  iq_connect_token
+  devices = Spaceship::ConnectAPI::Device.all
+                                         .select { |d| d.status.to_s == 'ENABLED' && platforms.include?(d.platform.to_s) }
+                                         .map { |d| { udid: d.udid, name: d.name } }
+  UI.user_error!("The developer portal has no enabled #{platforms.join('/')} devices") if devices.empty?
+
+  path = File.join(iq_root, 'fastlane', 'devices.txt')
+  content = iq_devices_file_content(devices)
+  old = File.exist?(path) ? File.readlines(path).map(&:chomp) : []
+  new_lines = content.lines.map(&:chomp)
+  (new_lines - old).each { |l| UI.success("+ #{l}") }
+  (old - new_lines).each { |l| UI.important("- #{l}") }
+  if old == new_lines
+    UI.success("fastlane/devices.txt is already up to date (#{devices.count} devices)")
+  elsif dry_run
+    UI.important("dry_run: fastlane/devices.txt not written (#{devices.count} devices on the portal)")
+  else
+    File.write(path, content)
+    UI.success("fastlane/devices.txt written (#{devices.count} devices). Run `fastlane update_devices_and_profiles` to add them to the profiles")
+  end
+  devices
+end
+
+# Next marketing version: bump is 'major', 'minor' or 'patch'. "1.0" + minor -> "1.1", + patch -> "1.0.1", + major -> "2.0"
+def iq_next_version(current, bump)
+  parts = current.to_s.split('.').map(&:to_i)
+  UI.user_error!("Current version '#{current}' does not look like 1.2 or 1.2.3") if parts.empty? || current.to_s !~ /\A\d+(\.\d+){0,2}\z/
+  parts << 0 while parts.size < 3
+  major, minor, patch = parts
+  next_parts = case bump
+               when 'major' then [major + 1, 0, 0]
+               when 'minor' then [major, minor + 1, 0]
+               else [major, minor, patch + 1]
+               end
+  keep = [current.to_s.split('.').size, 2].max
+  keep = 3 if bump == 'patch' || next_parts[2] != 0
+  next_parts.first(keep).join('.')
+end
+
+# MARKETING_VERSION is edited directly in the project (the xcodeproj gem): agvtool cannot read the version of
+# projects with a generated Info.plist, which is what Xcode creates by default. Returns nil when the project has
+# no MARKETING_VERSION build setting (old Info.plist based projects).
+def iq_set_marketing_version(xcodeproj_path, targetname, bump: nil, version: nil)
+  require 'xcodeproj'
+  project = Xcodeproj::Project.open(xcodeproj_path)
+  target = project.targets.find { |t| t.name == targetname }
+  UI.user_error!("Target #{targetname} not found in #{xcodeproj_path}") if target.nil?
+  configs = target.build_configurations + project.build_configurations
+  holders = configs.select { |c| c.build_settings.key?('MARKETING_VERSION') }
+  return nil if holders.empty?
+
+  current = (target.build_configurations + project.build_configurations).map { |c| c.build_settings['MARKETING_VERSION'] }.compact.first.to_s
+  UI.user_error!("MARKETING_VERSION is '#{current}', set it to a plain number like 1.0 first") unless current =~ /\A\d+(\.\d+){0,2}\z/
+  new_version = version.to_s.empty? ? iq_next_version(current, bump) : version
+  holders.each { |c| c.build_settings['MARKETING_VERSION'] = new_version }
+  project.save
+  [current, new_version]
+end
+
+# Bumps the marketing version (CFBundleShortVersionString) and commits it.
+#   bump: 'patch' | 'minor' | 'major'   or   version: '1.2.3'
+def iq_bump_version(xcprojname:, targetname:, bump: nil, version: nil, commit: true)
+  bump = bump.to_s
+  version = version.to_s
+  UI.user_error!('Use bump:patch|minor|major or version:1.2.3') if bump.empty? && version.empty?
+  UI.user_error!('Use either bump or version, not both') if !bump.empty? && !version.empty?
+  UI.user_error!("bump must be patch, minor or major (got '#{bump}')") unless bump.empty? || %w[patch minor major].include?(bump)
+  UI.user_error!("version must look like 1.2 or 1.2.3 (got '#{version}')") unless version.empty? || version =~ /\A\d+(\.\d+){1,2}\z/
+
+  xcodeproj = "#{xcprojname}.xcodeproj"
+  changed = iq_set_marketing_version(File.join(iq_root, xcodeproj), targetname, bump: bump, version: version)
+  if changed
+    before, after = changed
+  else
+    # Old project with the version in Info.plist: let agvtool handle it
+    before = get_version_number(xcodeproj: xcodeproj, target: targetname)
+    if version.empty?
+      increment_version_number(bump_type: bump, xcodeproj: xcodeproj)
+    else
+      increment_version_number(version_number: version, xcodeproj: xcodeproj)
+    end
+    after = get_version_number(xcodeproj: xcodeproj, target: targetname)
+  end
+  UI.success("Version #{before} -> #{after}")
+  commit_version_bump(message: "Version bump to #{after}", xcodeproj: xcodeproj) if commit
+  after
+end
+
+def iq_command?(name)
+  system("which #{name} > /dev/null 2>&1")
+end
+
+# SwiftLint and SwiftFormat (lint mode: nothing is modified). A tool that is configured but not installed fails the lane.
+def iq_lint(strict: true)
+  root = iq_root
+  checks = []
+  swiftlint_config = File.exist?(File.join(root, '.swiftlint.yml'))
+  swiftformat_config = File.exist?(File.join(root, '.swiftformat'))
+  checks << ['swiftlint', "swiftlint lint #{strict ? '--strict ' : ''}--quiet", swiftlint_config] if swiftlint_config || iq_command?('swiftlint')
+  checks << ['swiftformat', 'swiftformat --lint .', swiftformat_config] if swiftformat_config
+
+  if checks.empty?
+    UI.important('Nothing to lint: no .swiftlint.yml / .swiftformat and swiftlint is not installed')
+    return
+  end
+  failures = []
+  checks.each do |tool, command, configured|
+    unless iq_command?(tool)
+      failures << "#{tool} is configured but not installed (brew install #{tool})" if configured
+      next
+    end
+    UI.message("Running #{command}")
+    begin
+      sh("cd '#{root}' && #{command}")
+    rescue StandardError
+      failures << "#{tool} found problems"
+    end
+  end
+  UI.user_error!(failures.join("; ")) unless failures.empty?
+  UI.success('Lint passed')
 end

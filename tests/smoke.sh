@@ -52,6 +52,13 @@ touch fastlane/AuthKey_TEST123456.p8 && git add -f fastlane/AuthKey_TEST123456.p
 if ./scripts/doctor.sh --offline > "$WORK/doctor2.log" 2>&1; then fail "doctor fails when a .p8 key is committed"; else pass "doctor fails when a .p8 key is committed"; fi
 git rm -q -f --cached fastlane/AuthKey_TEST123456.p8 && rm fastlane/AuthKey_TEST123456.p8
 
+step "bump_version lane"
+if bundle exec fastlane bump_version bump:minor > "$WORK/bump.log" 2>&1; then pass "bump_version bump:minor runs"; else fail "bump_version bump:minor runs"; tail -20 "$WORK/bump.log"; fi
+check "marketing version is now 1.1" bash -c 'xcodebuild -project SampleApp.xcodeproj -scheme SampleApp -showBuildSettings 2>/dev/null | grep -E "^ *MARKETING_VERSION = 1\.1(\.0)?$"'
+check "the bump was committed" bash -c 'git log -1 --format=%s | grep -q "Version bump to 1.1"'
+if bundle exec fastlane bump_version > "$WORK/bump2.log" 2>&1; then fail "bump_version without arguments fails"; else pass "bump_version without arguments fails"; fi
+check "...and says how to use it" grep -q "Use bump:patch|minor|major or version:1.2.3" "$WORK/bump2.log"
+
 step "scripts/build.sh (build only)"
 if ./scripts/build.sh > "$WORK/build.log" 2>&1; then pass "build succeeds"; else fail "build succeeds"; tail -30 "$WORK/build.log"; fi
 check "deriveddata cleaned up" test ! -d deriveddata
