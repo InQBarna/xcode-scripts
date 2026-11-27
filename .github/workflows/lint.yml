@@ -22,4 +22,5 @@ jobs:
         run: |
           for f in fastlane/CommonFastfile samples/*.rb; do ruby -c "$f" > /dev/null && echo "ok $f"; done
       - name: YAML is valid
-        run: ruby -ryaml -e 'ARGV.each { |f| YAML.load_file(f); puts "ok #{f}" }' templates/github-actions/*.yml .github/workflows/*.yml
+        run: |
+          ruby -ryaml -e 'ARGV.each { |f| YAML.load_file(f, aliases: true); puts "ok #{f}" }' templates/github-actions/*.yml .github/workflows/*.yml
