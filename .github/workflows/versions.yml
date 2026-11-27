@@ -1,0 +1,84 @@
+# Keeps the versions new projects get (versions.env) current without anybody picking them:
+# every Monday it tries the newest Ruby with the end-to-end smoke test; if it passes, it opens a PR bumping
+# versions.env, if it fails, it opens an issue. It also reports outdated actions used in templates/.
+name: Versions
+
+on:
+  schedule:
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+jobs:
+  ruby:
+    runs-on: macos-latest
+    timeout-minutes: 90
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Find the newest stable Ruby
+        id: ruby
+        run: |
+          brew install rbenv > /dev/null 2>&1 || true
+          # Upstream ruby-build as an rbenv plugin: Homebrew's can lag behind Ruby releases
+          git clone -q --depth 1 https://github.com/rbenv/ruby-build.git "$(rbenv root)/plugins/ruby-build"
+          latest=$(rbenv install -l | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -n 1)
+          current=$(grep -E '^RUBY_VERSION=' versions.env | cut -d= -f2)
+          echo "latest=$latest" >> "$GITHUB_OUTPUT"
+          echo "current=$current" >> "$GITHUB_OUTPUT"
+          echo "Pinned: $current, newest: $latest"
+
+      - name: Smoke test with the newest Ruby
+        id: smoke
+        if: steps.ruby.outputs.latest != steps.ruby.outputs.current
+        continue-on-error: true
+        env:
+          XCODE_SCRIPTS_RUBY: ${{ steps.ruby.outputs.latest }}
+        run: tests/smoke.sh
+
+      - name: Open a PR bumping versions.env
+        if: steps.smoke.outcome == 'success'
+        env:
+          LATEST: ${{ steps.ruby.outputs.latest }}
+          CURRENT: ${{ steps.ruby.outputs.current }}
+        run: |
+          branch="bump-ruby-$LATEST"
+          sed -i '' -e "s/^RUBY_VERSION=.*/RUBY_VERSION=$LATEST/" versions.env
+          git config user.name "github-actions"
+          git config user.email "github-actions@users.noreply.github.com"
+          git checkout -b "$branch"
+          git commit -am "Bump Ruby for new projects: $CURRENT -> $LATEST"
+          git push origin "$branch"
+          gh pr create --title "Bump Ruby for new projects: $CURRENT -> $LATEST" \
+            --body "tests/smoke.sh passed with Ruby $LATEST (run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID). Merging makes it the default for newly generated projects."
+
+      - name: Open an issue when the newest Ruby breaks the setup
+        if: steps.smoke.outcome == 'failure'
+        env:
+          LATEST: ${{ steps.ruby.outputs.latest }}
+        run: |
+          gh label create versions --color FBCA04 --description "Dependency / version freshness" 2>/dev/null || true
+          gh issue create --label versions --title "Ruby $LATEST breaks the generated setup" \
+            --body "tests/smoke.sh failed with Ruby $LATEST: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. New projects keep getting the version in versions.env until this is fixed."
+
+  actions:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v7
+      - id: check
+        continue-on-error: true
+        run: tests/check-actions.sh
+      - name: Open an issue for outdated actions
+        if: steps.check.outcome == 'failure'
+        run: |
+          gh label create versions --color FBCA04 --description "Dependency / version freshness" 2>/dev/null || true
+          gh issue create --label versions --title "Actions in templates/ are outdated" \
+            --body "tests/check-actions.sh reports newer majors: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"

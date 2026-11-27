@@ -1,0 +1,18 @@
+# macOS / editors
+.DS_Store
+.idea/
+.vscode/
+
+# Ruby (local tooling and tests)
+.bundle/
+vendor/bundle/
+Gemfile.lock
+.ruby-version
+
+# Artifacts produced when trying the scripts on a sample project
+deriveddata/
+gymbuildlog/
+coverage/
+fastlane/test_output/
+fastlane/test_output_ui/
+fastlane/report.xml
