@@ -69,6 +69,28 @@ bash <(curl -fsSL https://raw.githubusercontent.com/InQBarna/xcode-scripts/maste
    Simulator defaults to the newest installed iOS runtime and iPhone; override with `RUNTIME=18.2 DEVICE="iPhone 16"`.
    Xcode other than `/Applications/Xcode.app`: `XCODE_EXTRA_PATH=-16.2` (uses `/Applications/Xcode-16.2.app`).
 
+## CI (GitHub Actions and Jenkins)
+
+The generator asks which CI templates to add (`CI_PROVIDER=github|jenkins|both|none` to skip the question). Existing files are never overwritten.
+Templates live in `templates/` and call the same lanes you run locally, so CI and your machine behave the same.
+
+| File created | What it does |
+|---|---|
+| `.github/workflows/ci.yml` | On every PR and push to main: `fastlane test`, uploads coverage and junit results as artifacts |
+| `.github/workflows/distribute.yml` | Manual run (Actions tab): sends a build to Firebase or TestFlight with `fastlane firebase` / `beta` |
+| `Jenkinsfile` | `Setup` + `Build / test` (publishes junit and cobertura) + `Distribute`, chosen with the `INTENT` parameter |
+
+Secrets for distribution (GitHub repository secrets / Jenkins credentials):
+
+| Name | Content |
+|---|---|
+| `MATCH_PASSPHRASE` | Passphrase of the match repo |
+| `MATCH_GIT_BASIC_AUTHORIZATION` | GitHub only: base64 of `user:token` with read access to the match repo |
+| `ASC_KEY_ID`, `ASC_ISSUER_ID`, `ASC_KEY_P8` | App Store Connect API key (content of the `.p8`, so the key is never committed) |
+| `FIREBASE_TOKEN` | Firebase distribution only, from `firebase login:ci` |
+
+The generated Fastfile calls `iq_asc_api_key` in `before_all`, which uses those `ASC_*` env vars when present and falls back to the key file for local runs. `build` and `test` never need the key.
+
 ## App Store / TestFlight
 
 - (Optional) Write devices to `fastlane/devices.txt`, or download them with
@@ -105,6 +127,5 @@ Run them with `bundle exec ruby ../xcode-scripts/samples/<script>`.
 
 ## Roadmap
 
-- GitHub Actions and Jenkins templates calling the same lanes
 - Replace `xcode-install` with `xcodes`; replace `slather`/`xchtmlreport` with native coverage and result bundle tooling
 - Non-interactive generator (env vars), `doctor` check script, rename `beta` lane to `testflight`

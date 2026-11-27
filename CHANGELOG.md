@@ -12,6 +12,8 @@ Breaking: generated projects are now SPM-only, and the repo moved to GitHub.
 - `CommonFastfile`: removed `compileBitcode`, `fastlane_version` raised to 2.220.0.
 - Build/test logic moved from the generated `build.sh` into shared lanes: `iq_build` / `iq_test` helpers in `CommonFastfile`, `build` and `test` lanes in the generated Fastfile. `build.sh` is now a thin wrapper. Warnings from Swift packages no longer count. Fixed `build.sh` bugs (inverted `JOB_NAME` check, UI tests run against a non-existent target).
 - Generated `.gitignore` also ignores build/test artifacts and `fastlane/AuthKey_*.p8` / `fastlane/.env*`; this repo got a `.gitignore`.
+- CI templates in `templates/` (GitHub Actions `ci.yml` and `distribute.yml`, `Jenkinsfile`), offered by the generator (`CI_PROVIDER`).
+- New `iq_asc_api_key` helper: App Store Connect key from `ASC_KEY_ID` / `ASC_ISSUER_ID` / `ASC_KEY_P8` env vars (CI secrets) or a key file. The generated Fastfile only configures it for lanes other than `build` / `test`.
 - `setup_match.sh`: fixed inverted check that tried to re-import the common Fastfile when already present.
 
 ## 1.x

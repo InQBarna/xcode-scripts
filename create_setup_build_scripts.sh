@@ -3,6 +3,7 @@
 # Run it from the root of the project repository (where the .xcodeproj lives).
 
 # Where helper scripts are fetched from. Override to test a branch/tag: XCODE_SCRIPTS_REF=my-branch
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)"
 XCODE_SCRIPTS_REF="${XCODE_SCRIPTS_REF:-master}"
 XCODE_SCRIPTS_RAW="https://raw.githubusercontent.com/InQBarna/xcode-scripts/$XCODE_SCRIPTS_REF"
 # Major version of CommonFastfile that generated Fastfiles will follow ("~> 2.0")
@@ -253,12 +254,13 @@ import_from_git(url: 'https://github.com/InQBarna/xcode-scripts.git',
 default_platform(:ios)
 
 before_all do |lane, options|
-    app_store_connect_api_key(
-      key_id: "",
-      issuer_id: "",
-      key_filepath: "./fastlane/AuthKey_XXXXXXX.p8",
-      in_house: false,
-    )
+  # build and test only compile, they don't need App Store Connect access.
+  # On CI set ASC_KEY_ID, ASC_ISSUER_ID and ASC_KEY_P8 (p8 file content) instead of committing the key.
+  unless [:build, :test].include?(lane)
+    iq_asc_api_key(key_id: "",
+                   issuer_id: "",
+                   key_filepath: "./fastlane/AuthKey_XXXXXXX.p8")
+  end
 end
 
 platform :ios do
@@ -353,6 +355,40 @@ if [[ $FOUND_SCRIPT == "" ]]; then
   bundle exec ruby /tmp/add_bundleversion_build_phase.rb
 else
   echo "[CREATE_SETUP_BUILD_SCRIPTS.SH] Build phase that includes build number to apps plist already found in project"
+fi
+
+# CI templates (GitHub Actions and/or Jenkins). Non interactive: CI_PROVIDER=github|jenkins|both|none
+install_ci_template() {
+    local template="$1" dest="$2"
+    if [[ -f "$dest" ]]; then
+        echo "[CREATE_SETUP_BUILD_SCRIPTS.SH] $dest already exists, not overwriting it"
+        return
+    fi
+    mkdir -p "$(dirname "$dest")"
+    if [[ -f "$SCRIPT_DIR/templates/$template" ]]; then
+        cp "$SCRIPT_DIR/templates/$template" "$dest"
+    else
+        curl -fsSL "$XCODE_SCRIPTS_RAW/templates/$template" > "$dest" || { rm -f "$dest"; echo "[CREATE_SETUP_BUILD_SCRIPTS.SH] Could not download template $template"; return; }
+    fi
+    echo "[CREATE_SETUP_BUILD_SCRIPTS.SH] Created $dest"
+}
+CI_PROVIDER="${CI_PROVIDER:-}"
+if [[ -z "$CI_PROVIDER" ]]; then
+    echo "[CREATE_SETUP_BUILD_SCRIPTS.SH] Which CI templates do you want? [g]ithub actions (default), [j]enkins, [b]oth, [n]one"
+    read CI_ANSWER
+    case "$CI_ANSWER" in
+        j*|J*) CI_PROVIDER="jenkins" ;;
+        b*|B*) CI_PROVIDER="both" ;;
+        n*|N*) CI_PROVIDER="none" ;;
+        *) CI_PROVIDER="github" ;;
+    esac
+fi
+if [[ "$CI_PROVIDER" == "github" || "$CI_PROVIDER" == "both" ]]; then
+    install_ci_template github-actions/ci.yml .github/workflows/ci.yml
+    install_ci_template github-actions/distribute.yml .github/workflows/distribute.yml
+fi
+if [[ "$CI_PROVIDER" == "jenkins" || "$CI_PROVIDER" == "both" ]]; then
+    install_ci_template jenkins/Jenkinsfile Jenkinsfile
 fi
 
 echo "[CREATE_SETUP_BUILD_SCRIPTS.SH] Settting up gitignore"
