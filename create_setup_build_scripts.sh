@@ -18,13 +18,12 @@ version_less_than() {
 }
 
 # Writing Gemfile with fastlane
-echo "[CREATE_SETUP_BUILD_SCRIPTS.SH] Creating Gemfile with fastlane, xcodeproj and slather (for coverage)"
+echo "[CREATE_SETUP_BUILD_SCRIPTS.SH] Creating Gemfile with fastlane and xcodeproj"
 GEMFILE=$(cat <<"EOF"
 source "https://rubygems.org"
 
 gem 'fastlane'
 gem 'xcodeproj'
-gem 'slather'
 
 plugins_path = File.join(File.dirname(__FILE__), 'fastlane', 'Pluginfile')
 eval_gemfile(plugins_path) if File.exist?(plugins_path)
@@ -68,9 +67,6 @@ if [[ `which brew` == "" ]]; then
     echo "[SETUP.SH]  Or follow instructions at https://brew.sh"
     exit 1
 fi
-
-echo "[SETUP.SH] Installing / checking xchtmlreport (optional, only used to build the UI tests junit report)"
-which xchtmlreport || brew install xctesthtmlreport 2>/dev/null || echo "[SETUP.SH] WARNING: Could not install xchtmlreport, UI test reports won't be generated"
 
 echo "[SETUP.SH] Checking / installing ruby + gem + bundler"
 export RUBY_VERSION=""
@@ -183,7 +179,19 @@ export LANG=en_US.UTF-8
 export RUBY_VERSION=""
 export BUNDLER_VERSION_MIN_GREP=" 2\."
 export PATH="$(brew --prefix 2>/dev/null || echo /opt/homebrew)/bin:$PATH"
-export XCODE_PATH="/Applications/Xcode$XCODE_EXTRA_PATH.app/"
+# Xcode: XCODE_EXTRA_PATH if set, else the version in .xcode-version (installed by xcinstall/install.sh), else /Applications/Xcode.app
+if [ "$XCODE_EXTRA_PATH" == "" ] && [ -f .xcode-version ]; then
+  WANTED_XCODE=`tr -d '[:space:]' < .xcode-version`
+  FOUND_XCODE=`ls -d /Applications/Xcode[-_]${WANTED_XCODE}*.app 2>/dev/null | sort -V | tail -n 1`
+  if [ "$FOUND_XCODE" != "" ]; then
+    export XCODE_PATH="$FOUND_XCODE/"
+  else
+    echo "[BUILD.SH] Warning: Xcode $WANTED_XCODE (from .xcode-version) not found in /Applications, using the default one"
+  fi
+fi
+if [ "$XCODE_PATH" == "" ]; then
+  export XCODE_PATH="/Applications/Xcode$XCODE_EXTRA_PATH.app/"
+fi
 export DEVELOPER_DIR="$XCODE_PATH/Contents/Developer/"
 echo "[BUILD.SH] Using xcode at $XCODE_PATH. (Use XCODE_EXTRA_PATH to change it)"
 
@@ -389,6 +397,11 @@ if [[ "$CI_PROVIDER" == "github" || "$CI_PROVIDER" == "both" ]]; then
 fi
 if [[ "$CI_PROVIDER" == "jenkins" || "$CI_PROVIDER" == "both" ]]; then
     install_ci_template jenkins/Jenkinsfile Jenkinsfile
+fi
+
+if [[ ! -f .xcode-version ]]; then
+    xcodebuild -version | head -n 1 | sed -e "s/Xcode //" > .xcode-version
+    echo "[CREATE_SETUP_BUILD_SCRIPTS.SH] Created .xcode-version with `cat .xcode-version` (Xcode used by build.sh and CI, edit if needed)"
 fi
 
 echo "[CREATE_SETUP_BUILD_SCRIPTS.SH] Settting up gitignore"

@@ -327,37 +327,47 @@ def iq_build(schemename:, xcprojname:)
 end
 
 # Builds (zero warnings), runs unit tests with coverage (coverage/cobertura.xml) and, optionally, UI tests.
-# UI test failures do not fail the lane by default (they are reported in fastlane/test_output_ui/report.junit);
+# Results are always written, even when tests fail, and the lane fails at the end:
+#   fastlane/test_output/report.junit      unit tests
+#   fastlane/test_output_ui/report.junit   UI tests
+#   coverage/cobertura.xml                 coverage of the unit tests (see iq_cobertura_from_xcresult)
+# UI test failures do not fail the lane by default (they are reported in the junit file);
 # pass fail_on_ui_test_failure: true to change it. Pass concurrent_ui_tests: false to disable parallel UI tests.
-def iq_test(schemename:, xcprojname:, test_target:, ui_test_target: '', concurrent_ui_tests: true, fail_on_ui_test_failure: false)
+# Only xcodebuild, xccov and fastlane are needed, no extra gems or brew packages.
+def iq_test(schemename:, xcprojname:, test_target:, ui_test_target: '', concurrent_ui_tests: true, fail_on_ui_test_failure: false, coverage_ignore: [])
   derived_data = File.join(iq_root, 'deriveddata')
   project = File.join(iq_root, "#{xcprojname}.xcodeproj")
   sim = iq_prepare_simulator
   device = "#{sim[:name]} (#{sim[:runtime]})"
   destination = "platform=iOS Simulator,name=#{sim[:name]},OS=#{sim[:runtime]}"
+  unit_output = File.join(iq_root, 'fastlane', 'test_output')
+  ui_output = File.join(iq_root, 'fastlane', 'test_output_ui')
   begin
     FileUtils.rm_rf(derived_data)
+    FileUtils.rm_rf(unit_output)
+    FileUtils.rm_rf(ui_output)
     iq_build_for_simulator(schemename: schemename, xcprojname: xcprojname, sim: sim, for_testing: true, derived_data: derived_data)
 
-    scan(project: project,
-         scheme: schemename,
-         test_without_building: true,
-         devices: [device],
-         code_coverage: true,
-         clean: false,
-         only_testing: [test_target],
-         derived_data_path: derived_data)
+    unit_error = nil
+    begin
+      scan(project: project,
+           scheme: schemename,
+           test_without_building: true,
+           devices: [device],
+           code_coverage: true,
+           clean: false,
+           only_testing: [test_target],
+           output_directory: unit_output,
+           result_bundle: true,
+           derived_data_path: derived_data)
+    rescue StandardError => e
+      unit_error = e
+    end
+    unit_xcresult = iq_find_xcresult(unit_output)
+    iq_junit_from_xcresult(unit_xcresult, unit_output)
+    iq_cobertura_from_xcresult(unit_xcresult, File.join(iq_root, 'coverage', 'cobertura.xml'), ignore: coverage_ignore) if unit_xcresult && unit_error.nil?
+    raise unit_error unless unit_error.nil?
 
-    UI.message("Building code coverage result")
-    slather(cobertura_xml: true,
-            output_directory: File.join(iq_root, 'coverage'),
-            ignore: ['*/SourcePackages/*'],
-            build_directory: derived_data,
-            scheme: schemename,
-            proj: project)
-
-    ui_output = File.join(iq_root, 'fastlane', 'test_output_ui')
-    FileUtils.rm_rf(ui_output)
     if ui_test_target.to_s.empty?
       iq_touch_report(File.join(ui_output, 'report.junit'))
     else
@@ -375,7 +385,7 @@ def iq_test(schemename:, xcprojname:, test_target:, ui_test_target: '', concurre
            xcargs: xcargs,
            derived_data_path: derived_data,
            fail_build: fail_on_ui_test_failure)
-      iq_ui_junit_report(ui_output, sim)
+      iq_junit_from_xcresult(iq_find_xcresult(ui_output), ui_output)
     end
   ensure
     iq_cleanup_simulator(sim)
@@ -384,18 +394,71 @@ def iq_test(schemename:, xcprojname:, test_target:, ui_test_target: '', concurre
   end
 end
 
-# Builds fastlane/test_output_ui/report.junit from the UI tests' xcresult using xchtmlreport (brew install xctesthtmlreport)
-def iq_ui_junit_report(ui_output, sim)
-  report = File.join(ui_output, 'report.junit')
-  xcresult = Dir.glob(File.join(ui_output, '*.xcresult')).first
-  if xcresult.nil? || `which xchtmlreport`.strip.empty?
-    UI.important("Could not build the UI tests junit report (#{xcresult.nil? ? 'no xcresult found' : 'xchtmlreport not installed'})")
+def iq_find_xcresult(dir)
+  Dir.glob(File.join(dir, '*.xcresult')).max_by { |f| File.mtime(f) }
+end
+
+# Writes <dir>/report.junit from an xcresult bundle, using fastlane's trainer.
+def iq_junit_from_xcresult(xcresult, dir)
+  report = File.join(dir, 'report.junit')
+  if xcresult.nil?
+    UI.important("No xcresult found in #{dir}, writing an empty junit report")
     return iq_touch_report(report)
   end
-  sh("xchtmlreport -j --lenient '#{xcresult}'")
-  generated = File.join(xcresult, 'report.junit')
-  # Test names include the simulator, strip it so results are comparable between runs
-  File.write(report, File.read(generated).gsub(" - #{sim[:name]} - #{sim[:runtime]}", ''))
+  trainer(path: xcresult, output_directory: dir, output_filename: 'report.junit', fail_build: false)
+end
+
+# Converts the coverage inside an xcresult bundle (xccov) to a Cobertura xml, which Jenkins, GitHub and most
+# CI tools understand. Files of Swift packages and test targets are ignored; add more regexes/strings in `ignore`.
+def iq_cobertura_from_xcresult(xcresult, output, ignore: [], root: nil)
+  require 'json'
+  require 'time'
+  require 'cgi'
+  root = File.realpath(root || iq_root)
+  ignore = [%r{/SourcePackages/}, %r{/\.build/}, %r{/[^/]*Tests/}, %r{/Pods/}] + ignore.map { |i| i.is_a?(Regexp) ? i : Regexp.new(Regexp.escape(i)) }
+  data = JSON.parse(sh("xcrun xccov view --archive --json '#{xcresult}'", log: false))
+
+  files = data.reject { |path, _| ignore.any? { |re| re.match?(path) } }.map do |path, lines|
+    lines = lines.select { |l| l['isExecutable'] }.sort_by { |l| l['line'] }
+    next if lines.empty?
+    real = (File.realpath(path) rescue path)
+    { path: real.start_with?("#{root}/") ? real.sub("#{root}/", '') : path, lines: lines }
+  end.compact
+
+  rate = lambda do |covered, valid|
+    valid.zero? ? '1' : format('%.4f', covered.to_f / valid)
+  end
+  covered_in = ->(lines) { lines.count { |l| l['executionCount'].to_i > 0 } }
+  total_valid = files.sum { |f| f[:lines].count }
+  total_covered = files.sum { |f| covered_in.call(f[:lines]) }
+
+  xml = []
+  xml << '<?xml version="1.0" encoding="UTF-8"?>'
+  xml << %(<coverage line-rate="#{rate.call(total_covered, total_valid)}" branch-rate="0" lines-covered="#{total_covered}" lines-valid="#{total_valid}" branches-covered="0" branches-valid="0" complexity="0" version="1" timestamp="#{Time.now.to_i}">)
+  xml << "  <sources><source>#{CGI.escapeHTML(root)}</source></sources>"
+  xml << '  <packages>'
+  files.group_by { |f| File.dirname(f[:path]) }.sort.each do |dir, dir_files|
+    valid = dir_files.sum { |f| f[:lines].count }
+    covered = dir_files.sum { |f| covered_in.call(f[:lines]) }
+    xml << %(    <package name="#{CGI.escapeHTML(dir)}" line-rate="#{rate.call(covered, valid)}" branch-rate="0" complexity="0">)
+    xml << '      <classes>'
+    dir_files.sort_by { |f| f[:path] }.each do |f|
+      xml << %(        <class name="#{CGI.escapeHTML(File.basename(f[:path]))}" filename="#{CGI.escapeHTML(f[:path])}" line-rate="#{rate.call(covered_in.call(f[:lines]), f[:lines].count)}" branch-rate="0" complexity="0">)
+      xml << '          <methods/>'
+      xml << '          <lines>'
+      f[:lines].each { |l| xml << %(            <line number="#{l['line']}" hits="#{l['executionCount'].to_i}" branch="false"/>) }
+      xml << '          </lines>'
+      xml << '        </class>'
+    end
+    xml << '      </classes>'
+    xml << '    </package>'
+  end
+  xml << '  </packages>'
+  xml << '</coverage>'
+
+  FileUtils.mkdir_p(File.dirname(output))
+  File.write(output, xml.join("\n") + "\n")
+  UI.success("Coverage #{(100.0 * total_covered / [total_valid, 1].max).round(1)}% (#{total_covered}/#{total_valid} lines) written to #{output}")
 end
 
 # -----------------------------------------------------------------------------

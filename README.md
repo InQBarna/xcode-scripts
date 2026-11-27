@@ -30,7 +30,7 @@ Helper methods called from the lanes of your project's Fastfile (the generator c
 `scripts/build.sh` is just a wrapper: no `INTENT` runs `fastlane build`, `INTENT=test` runs `fastlane test`, `firebase`/`appstore` run the distribution lanes.
 Tunable with env vars: `RUNTIME`, `DEVICE`, `MAX_WARNINGS` (default 0), `DO_NOT_DELETE_SIMULATOR`. When `BUILD_NUMBER` is set (Jenkins) a dedicated throw-away simulator is created per job.
 UI tests are reported but don't fail the lane by default (`fail_on_ui_test_failure: true` in the `test` lane to change it); UI tests are skipped when the project has no UI test target.
-The UI test junit report needs `xchtmlreport` (`brew install xctesthtmlreport`, installed by `setup.sh`).
+Results are written even when tests fail (the lane fails at the end): junit with fastlane's `trainer`, coverage converted from the xcresult with `xccov` to `coverage/cobertura.xml` (Swift packages and test targets excluded; `coverage_ignore: [...]` in the `test` lane adds more). No extra gems or brew packages are needed.
 
 ## Versioning
 
@@ -123,9 +123,11 @@ Run them with `bundle exec ruby ../xcode-scripts/samples/<script>`.
 
 ## Xcode installation on CI machines
 
-`xcinstall/install.sh <version>` installs and selects an Xcode version (needs `XCODE_INSTALL_USER` / `XCODE_INSTALL_PASSWORD`).
+`xcinstall/install.sh [version]` installs (with [xcodes](https://github.com/XcodesOrg/xcodes)) and selects an Xcode version; without argument it uses `.xcode-version`.
+Downloading needs an Apple ID (`XCODES_USERNAME` / `XCODES_PASSWORD`) and an interactive 2FA code the first time, so do it once by hand on the machine.
+
+The generator creates `.xcode-version` with your current Xcode. `scripts/build.sh` and the GitHub Actions workflow use that version when it is installed (`/Applications/Xcode-<version>.app`, as xcodes names it, or `Xcode_<version>.app`); `XCODE_EXTRA_PATH` still overrides it.
 
 ## Roadmap
 
-- Replace `xcode-install` with `xcodes`; replace `slather`/`xchtmlreport` with native coverage and result bundle tooling
 - Non-interactive generator (env vars), `doctor` check script, rename `beta` lane to `testflight`
