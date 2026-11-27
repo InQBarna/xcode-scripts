@@ -5,7 +5,8 @@ It generates the scripts and fastlane setup so every project builds, tests and s
 
 ## What you get
 
-- `scripts/setup.sh`: installs what a machine needs (rbenv, Ruby, bundler, gems). Idempotent.
+- `scripts/setup.sh`: installs what a machine needs (rbenv, the Ruby from `.ruby-version`, gems). Idempotent.
+- `scripts/doctor.sh`: checks the whole setup (Xcode, Ruby, gems, scheme, fastlane, signing, CI) and says how to fix what is wrong.
 - `scripts/build.sh`: builds the project with **0 warnings allowed**; with `INTENT=test` also runs unit/UI tests and reports coverage.
 - `fastlane/Fastfile` importing the shared lanes from this repo (`fastlane/CommonFastfile`), pinned to a major version.
 - Build number build phase (`YYYYMMddHHmm`), match setup, `.gitignore`.
@@ -127,6 +128,18 @@ Run them with `bundle exec ruby ../xcode-scripts/samples/<script>`.
 Downloading needs an Apple ID (`XCODES_USERNAME` / `XCODES_PASSWORD`) and an interactive 2FA code the first time, so do it once by hand on the machine.
 
 The generator creates `.xcode-version` with your current Xcode. `scripts/build.sh` and the GitHub Actions workflow use that version when it is installed (`/Applications/Xcode-<version>.app`, as xcodes names it, or `Xcode_<version>.app`); `XCODE_EXTRA_PATH` still overrides it.
+
+## Versions
+
+This repo pins nothing, so it cannot go stale:
+
+- **Ruby**: a new project gets the latest stable Ruby known to ruby-build, written to its `.ruby-version` (`XCODE_SCRIPTS_RUBY=x.y.z` to choose another). From then on the project owns it: update `.ruby-version` and run `./scripts/setup.sh`. `scripts/doctor.sh` warns when it is close to end of life.
+- **Bundler / gems / fastlane**: bundler is the one that ships with that Ruby; `Gemfile.lock` (commit it) pins everything for the project. Dependabot (generated `.github/dependabot.yml`) proposes updates.
+- **Xcode**: `.xcode-version`, created from the Xcode you generate with.
+- **GitHub runners / actions**: `macos-latest`; action versions are kept fresh by the generated Dependabot config.
+- **CommonFastfile**: the only thing versioned here, with git tags; projects import `~> 2.0`.
+
+How this repo notices that "latest" broke: its CI runs the smoke test every Monday against whatever is newest, and opens a `versions` issue if it fails or if an action in `templates/` is behind (`tests/check-actions.sh`). Last verified: Ruby 4.0.10, bundler 4.0.20, fastlane 2.242.0, Xcode 26.4.
 
 ## Developing this repo
 

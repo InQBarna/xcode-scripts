@@ -14,6 +14,17 @@ XCODE_SCRIPTS_RAW="https://raw.githubusercontent.com/InQBarna/xcode-scripts/$XCO
 # Major version of CommonFastfile that generated Fastfiles will follow ("~> 2.0")
 XCODE_SCRIPTS_MAJOR="2"
 
+# Prints the path of a file from templates/: the local copy when running from a clone, else downloaded
+fetch_template() {
+    if [[ -f "$SCRIPT_DIR/templates/$1" ]]; then
+        echo "$SCRIPT_DIR/templates/$1"
+        return
+    fi
+    local dest="$(mktemp -d)/$1"
+    curl -fsSL "$XCODE_SCRIPTS_RAW/templates/$1" > "$dest" || { echo "[CREATE_SETUP_BUILD_SCRIPTS.SH] Could not download templates/$1" >&2; exit 1; }
+    echo "$dest"
+}
+
 # Prints the path of a helper script from samples/: the local copy when running from a clone, else downloaded
 fetch_sample() {
     if [[ -f "$SCRIPT_DIR/samples/$1" ]]; then
@@ -25,18 +36,13 @@ fetch_sample() {
     echo "$dest"
 }
 
-# Version methods
-version_less_than_or_equal() {
-    [  "$1" == `echo -e "$1\n$2" | sort -V | head -n1` ]
-}
-version_less_than() {
-    [ "$1" == "$2" ] && return 1 || version_less_than_or_equal $1 $2
-}
 
 # Writing Gemfile with fastlane
 echo "[CREATE_SETUP_BUILD_SCRIPTS.SH] Creating Gemfile with fastlane and xcodeproj"
 GEMFILE=$(cat <<"EOF"
 source "https://rubygems.org"
+
+ruby file: '.ruby-version'
 
 gem 'fastlane'
 gem 'xcodeproj'
@@ -47,18 +53,24 @@ EOF
 )
 echo "$GEMFILE" > Gemfile
 
-# Pre-checks
-USER_BUNDLER_VERSION=`bundle --version | sed -e "s/.*\([0-9]\.[0-9]*\.[0-9]*\).*/\1/"`
-BUNDLER_VERSION=$USER_BUNDLER_VERSION
-version_less_than "$USER_BUNDLER_VERSION" "2.5.0" && BUNDLER_VERSION="2.5.0"
-
-# Configure ruby (rbenv) GEMS
-RUBY_VERSION="3.3.7"
-MIN_GEM_VERSION="3.5.0"
+# Ruby: nothing is pinned in this repo. A new project gets the latest stable Ruby that rbenv/ruby-build knows
+# (override with XCODE_SCRIPTS_RUBY=x.y.z) and owns that choice from then on in its committed .ruby-version.
+# Bundler is whatever ships with that Ruby (Gemfile.lock records the version afterwards).
+if [[ ! -f .ruby-version ]]; then
+    if [[ -n "$XCODE_SCRIPTS_RUBY" ]]; then
+        echo "$XCODE_SCRIPTS_RUBY" > .ruby-version
+    else
+        which rbenv > /dev/null || brew install rbenv || exit 1
+        echo "[CREATE_SETUP_BUILD_SCRIPTS.SH] Updating ruby-build to find the latest stable Ruby"
+        brew upgrade ruby-build > /dev/null 2>&1 || true
+        LATEST_RUBY=`rbenv install -l 2>/dev/null | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -n 1`
+        [[ -n "$LATEST_RUBY" ]] || { echo "[CREATE_SETUP_BUILD_SCRIPTS.SH] Could not find the latest Ruby, set XCODE_SCRIPTS_RUBY=x.y.z"; exit 1; }
+        echo "$LATEST_RUBY" > .ruby-version
+    fi
+fi
+RUBY_VERSION=`tr -d '[:space:]' < .ruby-version`
 echo "[CREATE_SETUP_BUILD_SCRIPTS.SH] Setting up/configuring setup script with:"
-echo " RUBY_VERSION      \"$RUBY_VERSION\" (rbenv)"
-echo " MIN_GEM_VERSION   \"$MIN_GEM_VERSION\""
-echo " BuNDLER_VERSION   \"$BUNDLER_VERSION\""
+echo " RUBY_VERSION      \"$RUBY_VERSION\" (rbenv, from .ruby-version)"
 if [[ ! -d scripts ]]; then
     mkdir scripts
 fi
@@ -67,13 +79,6 @@ SETUP_SH=$(cat <<"EOF"
 export LC_ALL=en_US.UTF-8
 export LANG=en_US.UTF-8
 
-# Version methods
-version_less_than_or_equal() {
-    [  "$1" == `echo -e "$1\n$2" | sort -V | head -n1` ]
-}
-version_less_than() {
-    [ "$1" == "$2" ] && return 1 || version_less_than_or_equal $1 $2
-}
 
 echo "[SETUP.SH] Checking brew"
 if [[ `which brew` == "" ]]; then
@@ -84,51 +89,32 @@ if [[ `which brew` == "" ]]; then
     exit 1
 fi
 
-echo "[SETUP.SH] Checking / installing ruby + gem + bundler"
-export RUBY_VERSION=""
-export BUNDLER_VERSION=""
-export MIN_GEM_VERSION=""
+echo "[SETUP.SH] Checking / installing ruby + bundler (version from .ruby-version)"
 export PATH="$(brew --prefix)/bin:$PATH"
 if [[ `which rbenv` == "" ]]; then
     echo "[SETUP.SH] Installing rbenv"
     brew install rbenv
 fi
-version_less_than `gem --version` "$MIN_GEM_VERSION" && UPGRADE_GEM="yes" || UPGRADE_GEM="no"
-if [[ "$UPGRADE_GEM" == "yes" ]]; then
-  echo "[SETUP.SH] Upgrading gem executable"
-  gem update --system
-fi
+RUBY_VERSION=`tr -d '[:space:]' < .ruby-version` || { echo "[SETUP.SH] Missing .ruby-version"; exit 1; }
 which gem | grep ".rbenv" || eval "$(rbenv init -)"
-rbenv versions | grep "$RUBY_VERSION" || rbenv install $RUBY_VERSION
-rbenv local $RUBY_VERSION
-ruby --version | grep "$RUBY_VERSION" || exit 1
-gem env | grep "RUBY VERSION: $RUBY_VERSION" || exit 1
-if [[ `bundle --version | grep "$BUNDLER_VERSION"` == "" ]]; then
-    echo "Y" | gem uninstall -a bundler
-    gem install --user-install bundler:$BUNDLER_VERSION
+if ! rbenv versions --bare | grep -qx "$RUBY_VERSION"; then
+    # An old ruby-build does not know recent rubies
+    rbenv install -s "$RUBY_VERSION" || { brew upgrade ruby-build; rbenv install -s "$RUBY_VERSION" || exit 1; }
 fi
-if [[ `bundle --version | grep "$BUNDLER_VERSION"` == "" ]]; then
-  echo "[SETUP.SH] Could not install bundler version \"$BUNDLER_VERSION\""
-  exit 1
-fi
+rbenv rehash
+ruby --version | grep -F "ruby $RUBY_VERSION" || exit 1
 bundle install
 #bundle clean
 
 EOF
 )
 echo "$SETUP_SH" > scripts/setup.sh
-sed -i "" -e "s/^export RUBY_VERSION=\"\"$/export RUBY_VERSION=\"$RUBY_VERSION\"/g" scripts/setup.sh
-sed -i "" -e "s/^export BUNDLER_VERSION=\"\"$/export BUNDLER_VERSION=\"$BUNDLER_VERSION\"/g" scripts/setup.sh
-sed -i "" -e "s/^export MIN_GEM_VERSION=\"\"$/export MIN_GEM_VERSION=\"$MIN_GEM_VERSION\"/g" scripts/setup.sh
 chmod +x scripts/setup.sh
 echo "[CREATE_SETUP_BUILD_SCRIPTS.SH] Running setup script"
 scripts/setup.sh
 
 # build script
 echo "[CREATE_SETUP_BUILD_SCRIPTS.SH] Setting up/configuring build script with:"
-echo " RUBY_VERSION      \"$RUBY_VERSION\" (rbenv)"
-echo " MIN_GEM_VERSION   \"$MIN_GEM_VERSION\""
-echo " BuNDLER_VERSION   \"$BUNDLER_VERSION\""
 PROJECT_NAME=`find . -iname *.xcodeproj | head -n 1 | sed -e "s/\.\///g" | sed -e "s/\.xcodeproj//g"`
 if [[ $PROJECT_NAME == "" ]]; then
   echo "[CREATE_SETUP_BUILD_SCRIPTS.SH] Could not find workspace file, build script won't be generated"
@@ -192,8 +178,6 @@ BUILD_SH=$(cat <<"EOF"
 
 export LC_ALL=en_US.UTF-8
 export LANG=en_US.UTF-8
-export RUBY_VERSION=""
-export BUNDLER_VERSION_MIN="2.5.0"
 export PATH="$(brew --prefix 2>/dev/null || echo /opt/homebrew)/bin:$PATH"
 # Xcode: XCODE_EXTRA_PATH if set, else the version in .xcode-version (installed by xcinstall/install.sh), else /Applications/Xcode.app
 if [ "$XCODE_EXTRA_PATH" == "" ] && [ -f .xcode-version ]; then
@@ -222,13 +206,9 @@ fi
 
 echo "[BUILD.SH] Configuring ruby and checking bundler version"
 which gem | grep ".rbenv" || eval "$(rbenv init -)"
-CURRENT_BUNDLER=`bundle --version | grep -Eo '[0-9]+(\.[0-9]+)+' | head -n 1`
-if [ "`printf '%s\n%s\n' "$BUNDLER_VERSION_MIN" "$CURRENT_BUNDLER" | sort -V | head -n 1`" != "$BUNDLER_VERSION_MIN" ]; then
-  echo "[BUILD.SH] bundler $CURRENT_BUNDLER is older than $BUNDLER_VERSION_MIN, run ./scripts/setup.sh"
-  exit 1
-fi
-ruby --version | grep "$RUBY_VERSION" || exit 1
-gem env | grep "RUBY VERSION: $RUBY_VERSION" || exit 1
+RUBY_VERSION=`tr -d '[:space:]' < .ruby-version`
+ruby --version | grep -F "ruby $RUBY_VERSION" || { echo "[BUILD.SH] Ruby $RUBY_VERSION (from .ruby-version) is not active, run ./scripts/setup.sh"; exit 1; }
+bundle --version || exit 1
 
 if [[ "$INTENT" == "testflight" || "$INTENT" == "appstore" ]]; then
 
@@ -269,7 +249,6 @@ EOF
 )
 
 echo "$BUILD_SH" > scripts/build.sh
-sed -i "" -e "s/^export RUBY_VERSION=\"\"$/export RUBY_VERSION=\"$RUBY_VERSION\"/g" scripts/build.sh
 
 chmod +x scripts/build.sh
 
@@ -417,6 +396,7 @@ fi
 if [[ "$CI_PROVIDER" == "github" || "$CI_PROVIDER" == "both" ]]; then
     install_ci_template github-actions/ci.yml .github/workflows/ci.yml
     install_ci_template github-actions/distribute.yml .github/workflows/distribute.yml
+    install_ci_template github-actions/dependabot.yml .github/dependabot.yml
 fi
 if [[ "$CI_PROVIDER" == "jenkins" || "$CI_PROVIDER" == "both" ]]; then
     install_ci_template jenkins/Jenkinsfile Jenkinsfile
@@ -425,6 +405,11 @@ fi
 if [[ ! -f .xcode-version ]]; then
     xcodebuild -version | head -n 1 | sed -e "s/Xcode //" > .xcode-version
     echo "[CREATE_SETUP_BUILD_SCRIPTS.SH] Created .xcode-version with `cat .xcode-version` (Xcode used by build.sh and CI, edit if needed)"
+fi
+
+# Doctor: checks the project setup and says how to fix what is missing
+if [[ ! -f scripts/doctor.sh ]]; then
+    cp "$(fetch_template doctor.sh)" scripts/doctor.sh && chmod +x scripts/doctor.sh && echo "[CREATE_SETUP_BUILD_SCRIPTS.SH] Created scripts/doctor.sh (run it any time to check the setup)"
 fi
 
 echo "[CREATE_SETUP_BUILD_SCRIPTS.SH] Settting up gitignore"

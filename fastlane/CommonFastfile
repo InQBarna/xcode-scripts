@@ -1,4 +1,5 @@
-fastlane_version "2.220.0"
+# Lowest fastlane tested with tests/smoke.sh (needs trainer with Xcode 16+ xcresult support and scan build_for_testing)
+fastlane_version "2.242.0"
 
 default_platform :ios
 

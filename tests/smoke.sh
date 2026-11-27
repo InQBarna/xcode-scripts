@@ -35,7 +35,7 @@ step "Running the generator"
 TEAM_ID=ABCDE12345 MATCH_GIT_URL=https://example.invalid/match.git CI_PROVIDER=both XCODE_SCRIPTS_USE_LOCAL=1 \
     "$REPO/create_setup_build_scripts.sh" > "$WORK/generator.log" 2>&1 || { tail -30 "$WORK/generator.log"; die "generator failed (log: $WORK/generator.log)"; }
 for f in Gemfile scripts/setup.sh scripts/build.sh fastlane/Fastfile fastlane/Appfile fastlane/Matchfile fastlane/devices.txt \
-         .gitignore .xcode-version .ruby-version Jenkinsfile .github/workflows/ci.yml .github/workflows/distribute.yml; do
+         .gitignore .xcode-version .ruby-version Jenkinsfile .github/workflows/ci.yml .github/workflows/distribute.yml .github/dependabot.yml scripts/doctor.sh; do
     check "generated $f" test -f "$f"
 done
 check "Gemfile has no cocoapods" bash -c '! grep -qi cocoapods Gemfile'
@@ -44,6 +44,13 @@ check "Fastfile imports CommonFastfile once" bash -c '[ "$(grep -c CommonFastfil
 check "Matchfile has the team and repo" bash -c 'grep -q ABCDE12345 fastlane/Matchfile && grep -q example.invalid fastlane/Matchfile'
 check "build number build phase added" grep -q "BUILD NUMBER FROM FASTLANE TO PLIST" SampleApp.xcodeproj/project.pbxproj
 git add -A && git -c user.name=smoke -c user.email=smoke@example.com commit -q -m "generated" || die "git commit failed"
+
+step "scripts/doctor.sh"
+if ./scripts/doctor.sh --offline > "$WORK/doctor.log" 2>&1; then pass "doctor passes on a freshly generated project"; else fail "doctor passes on a freshly generated project"; cat "$WORK/doctor.log"; fi
+check "doctor warns about the missing App Store Connect key" grep -q "no App Store Connect API key" "$WORK/doctor.log"
+touch fastlane/AuthKey_TEST123456.p8 && git add -f fastlane/AuthKey_TEST123456.p8
+if ./scripts/doctor.sh --offline > "$WORK/doctor2.log" 2>&1; then fail "doctor fails when a .p8 key is committed"; else pass "doctor fails when a .p8 key is committed"; fi
+git rm -q -f --cached fastlane/AuthKey_TEST123456.p8 && rm fastlane/AuthKey_TEST123456.p8
 
 step "scripts/build.sh (build only)"
 if ./scripts/build.sh > "$WORK/build.log" 2>&1; then pass "build succeeds"; else fail "build succeeds"; tail -30 "$WORK/build.log"; fi
