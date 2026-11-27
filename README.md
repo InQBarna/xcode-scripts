@@ -128,6 +128,18 @@ Downloading needs an Apple ID (`XCODES_USERNAME` / `XCODES_PASSWORD`) and an int
 
 The generator creates `.xcode-version` with your current Xcode. `scripts/build.sh` and the GitHub Actions workflow use that version when it is installed (`/Applications/Xcode-<version>.app`, as xcodes names it, or `Xcode_<version>.app`); `XCODE_EXTRA_PATH` still overrides it.
 
+## Developing this repo
+
+`tests/smoke.sh` is an end-to-end test: it generates a throwaway iOS project (`tests/fixtures/SampleApp`, with XcodeGen), runs the generator on it unattended and checks the result:
+generated files, `scripts/build.sh`, unit + UI tests, junit, coverage, a warning failing the build, and a failing test still writing its report. It takes a few minutes and needs macOS, Xcode with an iOS simulator, brew and network. It also runs in GitHub Actions on every PR.
+
+```
+tests/smoke.sh                  # SMOKE_KEEP=1 keeps the temporary project for debugging
+```
+
+To try your local changes on a real project, run the generator from your clone with `XCODE_SCRIPTS_USE_LOCAL=1` (uses the clone's samples, templates and `CommonFastfile`).
+Unattended generator: `TEAM_ID=... MATCH_GIT_URL=... CI_PROVIDER=github|jenkins|both|none`.
+
 ## Roadmap
 
-- Non-interactive generator (env vars), `doctor` check script
+- `doctor` check script

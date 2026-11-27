@@ -18,8 +18,11 @@ fi
 
 # Writing Matchfile
 echo "[SETUP_MATCH.SH] Creating Matchfile with team id $TEAM_ID"
-echo "[SETUP_MATCH.SH] Please provide the url for the match repo"
-read repo_url
+repo_url="$MATCH_GIT_URL"
+if [[ -z "$repo_url" ]]; then
+  echo "[SETUP_MATCH.SH] Please provide the url for the match repo (or set MATCH_GIT_URL)"
+  read repo_url
+fi
 
 echo "
 git_url(\"$repo_url\")
@@ -32,7 +35,7 @@ app_identifier [\"$APP_IDENTIFIER\"]
 " > fastlane/Matchfile
 
 # Importing the common lanes (pinned to the current major version)
-if grep -q "import_from_git.*xcode-scripts" fastlane/Fastfile; then
+if grep -q "CommonFastfile" fastlane/Fastfile; then
   echo "[SETUP_MATCH.SH] Fastfile already includes default match lanes"
 else
   echo "[SETUP_MATCH.SH] Updating Fastfile to import default match lanes"

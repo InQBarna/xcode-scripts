@@ -299,15 +299,31 @@ end
 def iq_build_for_simulator(schemename:, xcprojname:, sim:, for_testing:, derived_data:)
   log_dir = File.join(iq_root, 'gymbuildlog')
   FileUtils.rm_rf(log_dir)
-  gym(project: File.join(iq_root, "#{xcprojname}.xcodeproj"),
-      scheme: schemename,
-      skip_archive: true,
-      skip_package_ipa: true,
-      configuration: 'Debug',
-      destination: "platform=iOS Simulator,name=#{sim[:name]},OS=#{sim[:runtime]}",
-      buildlog_path: log_dir,
-      xcargs: for_testing ? 'clean build-for-testing' : 'clean',
-      derived_data_path: derived_data)
+  project = File.join(iq_root, "#{xcprojname}.xcodeproj")
+  destination = "platform=iOS Simulator,name=#{sim[:name]},OS=#{sim[:runtime]}"
+  if for_testing
+    # gym always appends a plain `build` action after its xcargs, which drops the test bundles,
+    # so scan builds for testing here (scan then runs them with test_without_building)
+    scan(project: project,
+         scheme: schemename,
+         build_for_testing: true,
+         devices: ["#{sim[:name]} (#{sim[:runtime]})"],
+         configuration: 'Debug',
+         clean: true,
+         buildlog_path: log_dir,
+         derived_data_path: derived_data,
+         output_types: '')
+  else
+    gym(project: project,
+        scheme: schemename,
+        skip_archive: true,
+        skip_package_ipa: true,
+        configuration: 'Debug',
+        destination: destination,
+        buildlog_path: log_dir,
+        xcargs: 'clean',
+        derived_data_path: derived_data)
+  end
   iq_check_warnings(File.join(log_dir, "#{xcprojname}-#{schemename}.log"))
 end
 

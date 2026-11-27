@@ -1,6 +1,11 @@
 #!/bin/bash
 # Generates scripts/setup.sh, scripts/build.sh and a fastlane setup for a new (SPM-only) iOS project.
 # Run it from the root of the project repository (where the .xcodeproj lives).
+#
+# Non interactive use (everything else is detected from the project):
+#   TEAM_ID=XXXXXXXXXX MATCH_GIT_URL=<match repo url> CI_PROVIDER=github|jenkins|both|none ./create_setup_build_scripts.sh
+# Testing changes of this repo from a clone: XCODE_SCRIPTS_USE_LOCAL=1 ../xcode-scripts/create_setup_build_scripts.sh
+#   (uses the samples/templates of the clone and a Fastfile importing the clone's CommonFastfile instead of the GitHub one)
 
 # Where helper scripts are fetched from. Override to test a branch/tag: XCODE_SCRIPTS_REF=my-branch
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)"
@@ -8,6 +13,17 @@ XCODE_SCRIPTS_REF="${XCODE_SCRIPTS_REF:-master}"
 XCODE_SCRIPTS_RAW="https://raw.githubusercontent.com/InQBarna/xcode-scripts/$XCODE_SCRIPTS_REF"
 # Major version of CommonFastfile that generated Fastfiles will follow ("~> 2.0")
 XCODE_SCRIPTS_MAJOR="2"
+
+# Prints the path of a helper script from samples/: the local copy when running from a clone, else downloaded
+fetch_sample() {
+    if [[ -f "$SCRIPT_DIR/samples/$1" ]]; then
+        echo "$SCRIPT_DIR/samples/$1"
+        return
+    fi
+    local dest="$(mktemp -d)/$1"
+    curl -fsSL "$XCODE_SCRIPTS_RAW/samples/$1" > "$dest" || { echo "[CREATE_SETUP_BUILD_SCRIPTS.SH] Could not download samples/$1" >&2; exit 1; }
+    echo "$dest"
+}
 
 # Version methods
 version_less_than_or_equal() {
@@ -177,7 +193,7 @@ BUILD_SH=$(cat <<"EOF"
 export LC_ALL=en_US.UTF-8
 export LANG=en_US.UTF-8
 export RUBY_VERSION=""
-export BUNDLER_VERSION_MIN_GREP=" 2\."
+export BUNDLER_VERSION_MIN="2.5.0"
 export PATH="$(brew --prefix 2>/dev/null || echo /opt/homebrew)/bin:$PATH"
 # Xcode: XCODE_EXTRA_PATH if set, else the version in .xcode-version (installed by xcinstall/install.sh), else /Applications/Xcode.app
 if [ "$XCODE_EXTRA_PATH" == "" ] && [ -f .xcode-version ]; then
@@ -206,7 +222,11 @@ fi
 
 echo "[BUILD.SH] Configuring ruby and checking bundler version"
 which gem | grep ".rbenv" || eval "$(rbenv init -)"
-bundle --version | grep "$BUNDLER_VERSION_MIN_GREP" || exit 1
+CURRENT_BUNDLER=`bundle --version | grep -Eo '[0-9]+(\.[0-9]+)+' | head -n 1`
+if [ "`printf '%s\n%s\n' "$BUNDLER_VERSION_MIN" "$CURRENT_BUNDLER" | sort -V | head -n 1`" != "$BUNDLER_VERSION_MIN" ]; then
+  echo "[BUILD.SH] bundler $CURRENT_BUNDLER is older than $BUNDLER_VERSION_MIN, run ./scripts/setup.sh"
+  exit 1
+fi
 ruby --version | grep "$RUBY_VERSION" || exit 1
 gem env | grep "RUBY VERSION: $RUBY_VERSION" || exit 1
 
@@ -255,9 +275,7 @@ chmod +x scripts/build.sh
 
 FASTFILE=$(cat <<"EOF"
 
-import_from_git(url: 'https://github.com/InQBarna/xcode-scripts.git',
-               path: 'fastlane/CommonFastfile',
-               version: '~> __MAJOR__.0')
+__IMPORT_COMMON_FASTFILE__
 
 default_platform(:ios)
 
@@ -327,16 +345,24 @@ EOF
 
 if [ ! -d fastlane ]; then
   echo "[CREATE_SETUP_BUILD_SCRIPTS.SH] Setting up fastlane with"
-  echo "[CREATE_SETUP_BUILD_SCRIPTS.SH] Please provide the team id from developer portal"
-  read TEAM_ID
+  if [[ -z "$TEAM_ID" ]]; then
+    echo "[CREATE_SETUP_BUILD_SCRIPTS.SH] Please provide the team id from developer portal"
+    read TEAM_ID
+  fi
   echo " TEAM_ID           \"$TEAM_ID\""
   BUNDLE_ID=`xcodebuild -showBuildSettings --scheme="$SCHEME" -target "$MAIN_TARGET" | grep PRODUCT_BUNDLE_IDENTIFIER | sed -e "s/ *PRODUCT_BUNDLE_IDENTIFIER = \(.*\)$/\1/g"`
   echo " BUNDLE_ID         \"$BUNDLE_ID\""
   PRODUCT_NAME=`xcodebuild -showBuildSettings --scheme="$SCHEME" -target "$MAIN_TARGET" | grep FULL_PRODUCT_NAME | sed -e "s/ *FULL_PRODUCT_NAME = \(.*\)\.app$/\1/g"`
   echo " PRODUCT_NAME      \"$PRODUCT_NAME\""
   mkdir fastlane
-  echo "$FASTFILE" > fastlane/Fastfile
-  sed -i "" -e "s/__MAJOR__/$XCODE_SCRIPTS_MAJOR/g" fastlane/Fastfile
+  if [[ -n "$XCODE_SCRIPTS_USE_LOCAL" ]]; then
+    IMPORT_LINE="import '$SCRIPT_DIR/fastlane/CommonFastfile'"
+  else
+    IMPORT_LINE="import_from_git(url: 'https://github.com/InQBarna/xcode-scripts.git',
+               path: 'fastlane/CommonFastfile',
+               version: '~> $XCODE_SCRIPTS_MAJOR.0')"
+  fi
+  echo "${FASTFILE/__IMPORT_COMMON_FASTFILE__/$IMPORT_LINE}" > fastlane/Fastfile
   sed -i "" -e "s/appname: \"###\"/appname: \"$PRODUCT_NAME\"/g" fastlane/Fastfile
   sed -i "" -e "s/schemename: \"###\"/schemename: \"$SCHEME\"/g" fastlane/Fastfile
   sed -i "" -e "s/targetname: \"###\"/targetname: \"$MAIN_TARGET\"/g" fastlane/Fastfile
@@ -351,17 +377,13 @@ fi
 
 if [ ! -f fastlane/Matchfile ]; then
   echo "[CREATE_SETUP_BUILD_SCRIPTS.SH] Switching to setup_match.sh"
-  curl -fsSL $XCODE_SCRIPTS_RAW/samples/setup_match.sh > /tmp/setup_match.sh
-  chmod +x /tmp/setup_match.sh
-  /tmp/setup_match.sh
+  bash "$(fetch_sample setup_match.sh)"
 fi
 
 FOUND_SCRIPT=`grep "BUILD NUMBER FROM FASTLANE TO PLIST" "$PROJECT_NAME.xcodeproj/project.pbxproj"`
 if [[ $FOUND_SCRIPT == "" ]]; then
   echo "[CREATE_SETUP_BUILD_SCRIPTS.SH] Switching to add_bundleversion_build_phase.rb"
-  curl -fsSL $XCODE_SCRIPTS_RAW/samples/add_bundleversion_build_phase.rb > /tmp/add_bundleversion_build_phase.rb
-  chmod +x /tmp/add_bundleversion_build_phase.rb
-  bundle exec ruby /tmp/add_bundleversion_build_phase.rb
+  bundle exec ruby "$(fetch_sample add_bundleversion_build_phase.rb)"
 else
   echo "[CREATE_SETUP_BUILD_SCRIPTS.SH] Build phase that includes build number to apps plist already found in project"
 fi

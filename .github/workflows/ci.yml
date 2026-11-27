@@ -1,0 +1,32 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [master, v2]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Shell syntax
+        run: |
+          for f in create_setup_build_scripts.sh samples/*.sh xcinstall/*.sh tests/*.sh; do bash -n "$f" && echo "ok $f"; done
+      - name: Ruby syntax
+        run: |
+          for f in fastlane/CommonFastfile samples/*.rb; do ruby -c "$f" > /dev/null && echo "ok $f"; done
+      - name: Templates are valid YAML
+        run: ruby -ryaml -e 'ARGV.each { |f| YAML.load_file(f); puts "ok #{f}" }' templates/github-actions/*.yml
+
+  smoke:
+    # Generates a sample iOS project, runs the generator on it, then build/test/warnings/coverage (tests/smoke.sh)
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - run: tests/smoke.sh

@@ -17,6 +17,8 @@ Breaking: generated projects are now SPM-only, and the repo moved to GitHub.
 - `slather` and `xchtmlreport` removed. `iq_test` reads the xcresult with fastlane's `trainer` (junit) and `xccov` (coverage, converted to `coverage/cobertura.xml` by `iq_cobertura_from_xcresult`). Results are now written even when tests fail. The Gemfile only has `fastlane` and `xcodeproj`.
 - `xcinstall/install.sh` rewritten on top of `xcodes` (`xcode-install` / `xcversion` are deprecated, `xcinstall/Gemfile` removed). `.xcode-version` (created by the generator) selects the Xcode in `build.sh` and the GitHub Actions workflow.
 - TestFlight: helper renamed `iq_beta` -> `iq_testflight` and generated lane `beta` -> `ship_testflight` (a lane called `testflight` clashes with fastlane's action of the same name). `iq_beta` stays as a deprecated alias that warns, so existing `lane :beta` keep working. `INTENT=testflight` in `build.sh` / Jenkinsfile (`INTENT=appstore` still accepted by `build.sh`). Git tags stay `appstore/v...`.
+- Generator can run unattended (`TEAM_ID`, `MATCH_GIT_URL`, `CI_PROVIDER`) and from a clone (`XCODE_SCRIPTS_USE_LOCAL=1`); helper scripts are no longer written to fixed `/tmp` paths.
+- `tests/smoke.sh` + `tests/fixtures/SampleApp`: end-to-end test of the generator and the generated build/test setup, run by `.github/workflows/ci.yml` together with syntax checks. It found and fixed two bugs: `build.sh` rejected any bundler other than 2.x, and building for testing through `gym` silently dropped the test bundles (it appends its own `build` action), so unit tests could not run; `scan(build_for_testing: true)` is used instead.
 - `setup_match.sh`: fixed inverted check that tried to re-import the common Fastfile when already present.
 
 ## 1.x
