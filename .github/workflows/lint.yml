@@ -1,0 +1,25 @@
+# Cheap syntax checks, on every pull request.
+name: Lint
+
+on:
+  pull_request:
+  push:
+    branches: [master]
+
+concurrency:
+  group: lint-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Shell syntax
+        run: |
+          for f in create_setup_build_scripts.sh samples/*.sh xcinstall/*.sh tests/*.sh templates/*.sh; do bash -n "$f" && echo "ok $f"; done
+      - name: Ruby syntax
+        run: |
+          for f in fastlane/CommonFastfile samples/*.rb; do ruby -c "$f" > /dev/null && echo "ok $f"; done
+      - name: YAML is valid
+        run: ruby -ryaml -e 'ARGV.each { |f| YAML.load_file(f); puts "ok #{f}" }' templates/github-actions/*.yml .github/workflows/*.yml

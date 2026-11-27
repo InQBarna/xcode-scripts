@@ -144,7 +144,7 @@ How `versions.env` stays current without anybody choosing versions: `.github/wor
 ## Developing this repo
 
 `tests/smoke.sh` is an end-to-end test: it generates a throwaway iOS project (`tests/fixtures/SampleApp`, with XcodeGen), runs the generator on it unattended and checks the result:
-generated files, `scripts/build.sh`, unit + UI tests, junit, coverage, a warning failing the build, and a failing test still writing its report. It takes a few minutes and needs macOS, Xcode with an iOS simulator, brew and network. It also runs in GitHub Actions on every PR.
+generated files, `scripts/build.sh`, unit + UI tests, junit, coverage, a warning failing the build, and a failing test still writing its report. It takes a few minutes and needs macOS, Xcode with an iOS simulator, brew and network. It also runs in GitHub Actions (`smoke.yml`) on PRs that touch the generator, lanes, templates, samples, tests or `versions.env`; `lint.yml` runs syntax checks on every PR.
 
 ```
 tests/smoke.sh                  # SMOKE_KEEP=1 keeps the temporary project for debugging
