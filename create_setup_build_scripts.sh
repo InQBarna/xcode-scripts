@@ -154,8 +154,7 @@ fi
 echo " TEST_TARGET       \"$TEST_TARGET\""
 UI_TEST_TARGET=`xcodebuild -project $PROJECT_NAME.xcodeproj -list 2>/dev/null | sed -n '/Targets/,/^$/p' | grep "UITests" | sed -e "s/^[ ]*//g" | head -n 1`
 if [[ "$UI_TEST_TARGET" == "" ]]; then
-  UI_TEST_TARGET="${MAIN_TARGET}UITests"
-  echo "[CREATE_SETUP_BUILD_SCRIPTS.SH] There's no test target in your project, you can create a target named ${MAIN_TARGET}UITests later if you want to run ui test separately"
+  echo "[CREATE_SETUP_BUILD_SCRIPTS.SH] There's no UI test target in your project, UI tests will be skipped. Create a target named ${MAIN_TARGET}UITests and set ui_test_target in fastlane/Fastfile to run them"
 else
   echo " UI_TEST_TARGET    \"$UI_TEST_TARGET\""
 fi
@@ -171,33 +170,26 @@ fi
 BUILD_SH=$(cat <<"EOF"
 #!/bin/bash
 
+# Entry point for local runs and CI (Jenkins / GitHub Actions). The real work lives in the fastlane lanes:
+#   (no INTENT)        fastlane build     builds the app, 0 warnings allowed
+#   INTENT=test        fastlane test      build + unit tests + coverage + UI tests   (--no-concurrent: sequential UI tests)
+#   INTENT=firebase    fastlane firebase  sends a test version to Firebase App Distribution
+#   INTENT=appstore    fastlane beta      sends a version to TestFlight
+# Optional env: XCODE_EXTRA_PATH (Xcode at /Applications/Xcode$XCODE_EXTRA_PATH.app), RUNTIME, DEVICE, MAX_WARNINGS
+
 export LC_ALL=en_US.UTF-8
 export LANG=en_US.UTF-8
 export RUBY_VERSION=""
 export BUNDLER_VERSION_MIN_GREP=" 2\."
 export PATH="$(brew --prefix 2>/dev/null || echo /opt/homebrew)/bin:$PATH"
-if [ "$XCODE_EXTRA_PATH" == "" ]; then
-    export XCODE_EXTRA_PATH=""
-fi
 export XCODE_PATH="/Applications/Xcode$XCODE_EXTRA_PATH.app/"
 export DEVELOPER_DIR="$XCODE_PATH/Contents/Developer/"
-# Simulator: defaults to the newest installed iOS runtime and an iPhone. Override with RUNTIME="18.2" DEVICE="iPhone 16"
-if [ "$RUNTIME" == "" ]; then
-    export RUNTIME=`xcrun simctl list runtimes available | grep -E "^iOS [0-9.]+ " | sed -E "s/^iOS ([0-9.]+) .*/\1/" | sort -V | tail -n 1`
-    if [ "$RUNTIME" == "" ]; then
-        echo "[BUILD.SH] No iOS simulator runtime found, install one from Xcode > Settings > Components"
-        exit 1
-    fi
-fi
-if [ "$DEVICE" == "" ]; then
-    export DEVICE=`xcrun simctl list devicetypes | grep -E "iPhone [0-9]+ \(" | sed -E "s/ \(com.*//" | sort -V | tail -n 1`
-fi
 echo "[BUILD.SH] Using xcode at $XCODE_PATH. (Use XCODE_EXTRA_PATH to change it)"
 
 echo "[BUILD.SH] Checking input parameters"
 if [ "$INTENT" == "appstore" ] || [ "$INTENT" == "firebase" ]; then
   if [[ "$MATCH_PASSPHRASE" == "" ]]; then
-    echo "[BUILD.SH] Missing MATCH_PASSPHRASE env variable, configure jenkins bindings or please use:"
+    echo "[BUILD.SH] Missing MATCH_PASSPHRASE env variable, configure jenkins bindings / github secrets or please use:"
     echo "[BUILD.SH] export MATCH_PASSPHRASE=XXX"
     exit 1
   fi
@@ -208,228 +200,47 @@ which gem | grep ".rbenv" || eval "$(rbenv init -)"
 bundle --version | grep "$BUNDLER_VERSION_MIN_GREP" || exit 1
 ruby --version | grep "$RUBY_VERSION" || exit 1
 gem env | grep "RUBY VERSION: $RUBY_VERSION" || exit 1
-bundle --version | grep "$BUNDLER_VERSION_MIN_GREP" || exit 1
 
-if [[ $INTENT == "appstore" ]]; then
+if [[ "$INTENT" == "appstore" ]]; then
 
   echo "[BUILD.SH] Uploading to appstore using fastlane"
   bundle exec fastlane beta
 
-elif [[ $INTENT == "firebase" ]]; then
+elif [[ "$INTENT" == "firebase" ]]; then
 
-  echo "[BUILD.SH] Uploading to firebase using fastlane"
-  if [[ `which firebase` == "" ]]; then
-      export FIREBASE_PATH=`pwd`/firebase
-      ./firebase --version || curl -L "https://firebase.tools/bin/macos/latest" --output firebase && chmod +x firebase && ./firebase --version
-      if [[ `which firebase` == "" ]]; then
-        export PATH=$PATH:`pwd`
-      fi
-      if [[ `which firebase` == "" ]]; then
-         export FIREBASE_PATH=`pwd`/firebase
-         ./firebase --version || curl -L "https://firebase.tools/bin/macos/latest" --output firebase && chmod +x firebase && ./firebase --version
-         if [[ `which firebase` == "" ]]; then
-           export PATH=$PATH:`pwd`
-         fi
-         if [[ `which firebase` == "" ]]; then
-           echo "[BUILD.SH] Could not find or install firebase cli"
-           exit
-         fi
-      fi
+  if ! which firebase > /dev/null; then
+    echo "[BUILD.SH] Installing firebase cli"
+    export FIREBASE_PATH="`pwd`/firebase"
+    curl -L "https://firebase.tools/bin/macos/latest" --output firebase && chmod +x firebase || exit 1
+    export PATH="$PATH:`pwd`"
+    which firebase > /dev/null || { echo "[BUILD.SH] Could not find or install firebase cli"; exit 1; }
   fi
-
   echo "[BUILD.SH] Uploading to firebase using fastlane"
-  # Use this is firebase is added as SPM
-  # export UPLOAD_SYMBOLS_PATH=`xcodebuild -showBuildSettings | grep -m 1 "BUILD_DIR" | grep -oEi "\/.*" | sed 's/Build\/Products/SourcePackages\/checkouts\/firebase-ios-sdk\/Crashlytics\/upload-symbols/'`
-  # echo "Found UPLOAD_SYMBOLS_PATH at $UPLOAD_SYMBOLS_PATH"
+  # If Crashlytics symbols upload fails with SPM, set UPLOAD_SYMBOLS_PATH to the upload-symbols binary in SourcePackages
   bundle exec fastlane firebase
+
+elif [[ "$INTENT" == "test" ]]; then
+
+  if [[ "$*" == "--no-concurrent" ]]; then
+    bundle exec fastlane test concurrent_ui_tests:false
+  else
+    bundle exec fastlane test
+  fi
 
 else
 
-  PROJECT_NAME=""
-  SCHEME=""
-  TEST_TARGET=""
-  UI_TEST_TARGET=""
-
-  DERIVEDDATA="deriveddata"
-  # DERIVEDDATA="deriveddata$BUILD_NUMBER" # in case we need per-build derived data
-  cleanBuildDirectory() {
-    rm -Rf "$DERIVEDDATA"
-    rm -Rf gymbuildlog
-  }
-
-  if [[ $INTENT == "test" ]]; then
-    #
-    # Simulator build and cleanup
-    # 
-    echo "[BUILD.SH] [`date +"%H:%M:%S"`] Checking/creating a simulator ($DEVICE - $RUNTIME)"
-    if [ "$BUILD_NUMBER" == "" ]; then
-      echo "[BUILD.SH] No jenkins environment found (BUILD_NUMBER), so no script-specific simulator will be created"
-      simulatorName="$DEVICE"
-    else
-      if [ "$JOB_NAME" == "" ]; then
-        simulatorName="$DEVICE - $JOB_NAME - ${BUILD_NUMBER: -1}"
-      else
-        simulatorName="$DEVICE - ${BUILD_NUMBER: -1}"
-      fi
-    fi
-    simulatorUUID=`xcrun simctl list | sed -n "/-- iOS $RUNTIME --/,/-- /p" | grep "$simulatorName (" | sed -e "s/$simulatorName [(]\([^)]*\).*/\1/"`
-    if [[ "$simulatorUUID" == "" ]]; then 
-      echo "[BUILD.SH] Will create simulator \"$simulatorName\""
-      RUNTIME_TYPE=`xcrun simctl list | sed -n '/== Runtimes ==/,/== /p' | grep "iOS $RUNTIME (" | sed -e "s/.*) - \(.*\)/\1/"`
-      if [[ "$RUNTIME_TYPE" == "" ]]; then
-        echo "[BUILD.SH] Could not find installed runtime $RUNTIME. Aborting"
-        echo "[BUILD.SH] run \"xcrun simctl list\" and double check $RUNTIME is NOT available"
-        exit 1
-      fi
-      DEVICE_TYPE=`xcrun simctl list | sed -n '/== Device Types ==/,/== /p' | grep "$DEVICE (" | sed -e "s/$DEVICE [(]\([^)]*\).*/\1/"`
-      if [[ "$DEVICE_TYPE" == "" ]]; then
-        echo "[BUILD.SH] Could not find device type $DEVICE. Aborting"
-        echo "[BUILD.SH] run \"xcrun simctl list\" and double check $DEVICE is NOT available"
-        exit 1
-      fi
-      echo "[BUILD.SH] Creating device $simulatorName ($DEVICE_TYPE) with runtime $RUNTIME ($RUNTIME_TYPE)"
-      xcrun simctl create "$simulatorName" "$DEVICE_TYPE" "$RUNTIME_TYPE"
-      echo "xcrun simctl create \"$simulatorName\" \"$DEVICE_TYPE\" \"$RUNTIME_TYPE\""
-      simulatorUUID=`xcrun simctl list | sed -n "/-- iOS $RUNTIME --/,/-- /p" | grep "$simulatorName (" | sed -e "s/$simulatorName [(]\([^)]*\).*/\1/"`
-      if [[ "$simulatorUUID" == "" ]]; then 
-        echo "[BUILD.SH] Failed to create $simulatorName, aborting"
-        exit 1
-      fi
-    else
-      echo "[BUILD.SH] Found $simulatorName, resetting  state and removing previous data"
-      xcrun simctl shutdown $simulatorUUID
-      xcrun simctl erase $simulatorUUID
-    fi
-    removeCreatedSimulator() {
-      if [[ "$BUILD_NUMBER" == "" || "$DO_NOT_DELETE_SIMULATOR" != "" ]]; then
-        echo "[BUILD.SH] $simulatorName not deleted"
-      else
-        echo "[BUILD.SH] Delete created $simulatorName"
-        xcrun simctl shutdown $simulatorUUID || true
-        xcrun simctl delete $simulatorUUID
-      fi
-    }
-
-    #
-    # Building app for testing
-    # 
-    echo "[BUILD.SH] [`date +"%H:%M:%S"`] Building app for testing"
-    cleanBuildDirectory
-    bundle exec fastlane gym --project "./$PROJECT_NAME.xcodeproj" --scheme "$SCHEME" --skip_archive --configuration Debug --destination="platform=iOS Simulator,name=$simulatorName,OS=$RUNTIME" --skip_package_ipa true --buildlog_path gymbuildlog --xcargs "clean build-for-testing" --derived_data_path="$DERIVEDDATA"
-    if [ $? -ne 0 ]; then
-      removeCreatedSimulator
-      cleanBuildDirectory
-      exit 1
-    fi
-
-    #
-    # Checking for warnings
-    # 
-    MAX_WARNINGS=0
-    echo "[BUILD.SH] [`date +"%H:%M:%S"`] Checking for $MAX_WARNINGS warnings"
-    WARNINGS=`egrep '^(/.+:[0-9+:[0-9]+:.(warning):|fatal|===)' "gymbuildlog/$PROJECT_NAME-$SCHEME.log" | uniq`
-    NUM_WARNINGS=`echo $WARNINGS | egrep "(warning|fatal|===)" | wc -l`
-    if [[ "$NUM_WARNINGS" -gt "$MAX_WARNINGS" ]]; then
-      echo "There are $NUM_WARNINGS warnings, invalid build (max allowed warnings $MAX_WARNINGS"
-      echo $WARNINGS
-      removeCreatedSimulator
-      cleanBuildDirectory
-      exit 1
-    fi
-    echo "Nice,$NUM_WARNINGS warnings"
-
-    #
-    # Run unit tests
-    # 
-    echo "[BUILD.SH] [`date +"%H:%M:%S"`] Running unit tests"
-    bundle exec fastlane scan --test_without_building="true" --devices="$DEVICE ($RUNTIME)" --scheme="$SCHEME" --code_coverage="true" --clean="false" --only_testing="$TEST_TARGET" --derived_data_path="$DERIVEDDATA"
-    if [ $? -ne 0 ]; then
-      removeCreatedSimulator
-      cleanBuildDirectory
-      exit 1
-    fi
-    echo "[BUILD.SH] [`date +"%H:%M:%S"`] Building code coverage result"
-    bundle exec slather coverage --cobertura-xml --output-directory coverage --ignore "*/SourcePackages/*" --build-directory="$DERIVEDDATA" --scheme "$SCHEME" --workspace "$WORKSPACE_NAME.xcworkspace" "$PROJECT_NAME.xcodeproj"
-
-    #
-    # Run ui tests
-    # 
-    rm -Rf fastlane/test_output_ui/*
-    if [[ "$UI_TEST_TARGET" != "" ]]; then
-      if [[ "$*" != "--no-concurrent" ]]; then
-        echo "[BUILD.SH] [`date +"%H:%M:%S"`] Running UI tests concurrently"
-        bundle exec fastlane scan --test_without_building="true" --code_coverage="false" --clean="false" --only_testing="$UI_TEST_TARGET" --output_directory="fastlane/test_output_ui/" --result_bundle="true" --xcargs="-parallel-testing-enabled YES -parallel-testing-worker-count 3" --destination="platform=iOS Simulator,name=$simulatorName,OS=$RUNTIME" --devices="${simulatorName} ($RUNTIME)" --derived_data_path="$DERIVEDDATA" --disable_xcpretty || true
-        echo "[BUILD.SH] [`date +"%H:%M:%S"`] Building junit result with xchtml from files at"
-        xchtmlreport -r "./fastlane/test_output_ui/$PROJECT_NAME.xcresult" -j
-        cp "fastlane/test_output_ui/$PROJECT_NAME.xcresult/report.junit" "fastlane/test_output_ui/report.junit"
-        sed -i "" -e "s/ - $simulatorName - $RUNTIME//g" "fastlane/test_output_ui/report.junit"
-      else
-        echo "[BUILD.SH] [`date +"%H:%M:%S"`] Running UI tests"
-        bundle exec fastlane scan --test_without_building="true" --code_coverage="false" --clean="false" --only_testing="$UI_TEST_TARGET" --output_directory="fastlane/test_output_ui/" --result_bundle="true" --xcargs="--parallel-testing-enabled NO" --destination="platform=iOS Simulator,name=$simulatorName,OS=$RUNTIME" --devices="${simulatorName} ($RUNTIME)" --derived_data_path="$DERIVEDDATA" || true
-        echo "[BUILD.SH] [`date +"%H:%M:%S"`] Building junit result with xchtml from files at"
-        xchtmlreport -r "./fastlane/test_output_ui/$PROJECT_NAME.xcresult" -j
-      fi
-    else
-      touch fastlane/test_output_ui/report.junit 
-    fi
-
-    #
-    # Cleanup simulator
-    # 
-    removeCreatedSimulator
-    cleanBuildDirectory
-
-  else
-
-    #
-    # Building app
-    # 
-    echo "[BUILD.SH] [`date +"%H:%M:%S"`] Building app for testing"
-    simulatorName="$DEVICE"
-    cleanBuildDirectory
-    bundle exec fastlane gym --project "./$PROJECT_NAME.xcodeproj" --scheme "$SCHEME" --skip_archive --configuration Debug --destination="platform=iOS Simulator,name=$simulatorName,OS=$RUNTIME" --skip_package_ipa true --buildlog_path gymbuildlog --xcargs "clean" --derived_data_path="$DERIVEDDATA"
-    if [ $? -ne 0 ]; then
-      cleanBuildDirectory
-      exit 1
-    fi
-
-    #
-    # Checking for warnings
-    # 
-    MAX_WARNINGS=0
-    echo "[BUILD.SH] [`date +"%H:%M:%S"`] Checking for $MAX_WARNINGS warnings"
-    WARNINGS=`egrep '^(/.+:[0-9+:[0-9]+:.(warning):|fatal|===)' "gymbuildlog/$PROJECT_NAME-$SCHEME.log" | uniq`
-    NUM_WARNINGS=`echo $WARNINGS | egrep "(warning|fatal|===)" | wc -l`
-    if [[ "$NUM_WARNINGS" -gt "$MAX_WARNINGS" ]]; then
-      echo "There are $NUM_WARNINGS warnings, invalid build (max allowed warnings $MAX_WARNINGS"
-      echo $WARNINGS
-      cleanBuildDirectory
-      exit 1
-    fi
-
-    echo "Nice,$NUM_WARNINGS warnings"
-
-    # In case of only build, touch CICD result files so no error is thrown
-    touch coverage/cobertura.xml
-    touch fastlane/test_output/report.junit fastlane/test_output_ui/report.junit 
-
-    cleanBuildDirectory
-  fi
+  bundle exec fastlane build
 
 fi
+EXIT_CODE=$?
 
 unset DEVELOPER_DIR
+exit $EXIT_CODE
 EOF
 )
 
 echo "$BUILD_SH" > scripts/build.sh
 sed -i "" -e "s/^export RUBY_VERSION=\"\"$/export RUBY_VERSION=\"$RUBY_VERSION\"/g" scripts/build.sh
-sed -i "" -e "s/^  PROJECT_NAME=\"\"$/  PROJECT_NAME=\"$PROJECT_NAME\"/g" scripts/build.sh
-sed -i "" -e "s/^  SCHEME=\"\"$/  SCHEME=\"$SCHEME\"/g" scripts/build.sh
-sed -i "" -e "s/^  TEST_TARGET=\"\"$/  TEST_TARGET=\"$TEST_TARGET\"/g" scripts/build.sh
-sed -i "" -e "s/^  UI_TEST_TARGET=\"\"$/  UI_TEST_TARGET=\"$UI_TEST_TARGET\"/g" scripts/build.sh
-SAFE_PROJECT_NAME=`echo "$PROJECT_NAME" | tr -cd "[:alnum:]\n"`
-sed -i "" -e "s/export KEYCHAIN_NAME=\"\"/export KEYCHAIN_NAME=\"$SAFE_PROJECT_NAME\"/g" scripts/build.sh
 
 chmod +x scripts/build.sh
 
@@ -451,6 +262,21 @@ before_all do |lane, options|
 end
 
 platform :ios do
+
+  desc "Builds the app for the simulator, fails if there are warnings (used by scripts/build.sh and CI)"
+  lane :build do
+    iq_build(schemename: "###",
+             xcprojname: "###")
+  end
+
+  desc "Builds (0 warnings), runs unit tests with coverage and UI tests (used by scripts/build.sh and CI)"
+  lane :test do |options|
+    iq_test(schemename: "###",
+            xcprojname: "###",
+            test_target: "###",
+            ui_test_target: "###",
+            concurrent_ui_tests: options[:concurrent_ui_tests] != false)
+  end
 
   lane :renuke do
     
@@ -504,6 +330,8 @@ if [ ! -d fastlane ]; then
   sed -i "" -e "s/schemename: \"###\"/schemename: \"$SCHEME\"/g" fastlane/Fastfile
   sed -i "" -e "s/targetname: \"###\"/targetname: \"$MAIN_TARGET\"/g" fastlane/Fastfile
   sed -i "" -e "s/xcprojname: \"###\"/xcprojname: \"$PROJECT_NAME\"/g" fastlane/Fastfile
+  sed -i "" -e "s/ui_test_target: \"###\"/ui_test_target: \"$UI_TEST_TARGET\"/g" fastlane/Fastfile
+  sed -i "" -e "s/test_target: \"###\"/test_target: \"$TEST_TARGET\"/g" fastlane/Fastfile
   sed -i "" -e "s/bundleid: \"###.###.###\"/bundleid: \"$BUNDLE_ID\"/g" fastlane/Fastfile
 
   echo "app_identifier \"$BUNDLE_ID\"" > fastlane/Appfile
@@ -530,4 +358,19 @@ fi
 echo "[CREATE_SETUP_BUILD_SCRIPTS.SH] Settting up gitignore"
 curl "https://www.toptal.com/developers/gitignore/api/xcode,swift,macos,swiftpackagemanager,swiftpm" > .gitignore
 sed -i "" -e "/^\*\.xcodeproj$/d" .gitignore
-echo "fastlane/README.md" >> .gitignore
+cat >> .gitignore <<GITIGNORE_EOF
+fastlane/README.md
+
+# Build / test artifacts (scripts/build.sh and the fastlane build/test lanes)
+deriveddata/
+gymbuildlog/
+coverage/
+fastlane/test_output/
+fastlane/test_output_ui/
+fastlane/report.xml
+
+# Secrets: App Store Connect API keys and local env files (use CI secrets instead)
+fastlane/AuthKey_*.p8
+fastlane/.env*
+!fastlane/.env.example
+GITIGNORE_EOF

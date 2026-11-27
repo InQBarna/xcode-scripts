@@ -18,8 +18,19 @@ It generates the scripts and fastlane setup so every project builds, tests and s
 | `install_profiles` | Installs existing profiles read-only (no dev portal access needed) |
 | `renew_certs` | Renews expired certificates and regenerates profiles. `dry_run:true` only lists what would be deleted |
 
-Helper methods used from your project's lanes: `iq_beta` (TestFlight) and `iq_firebase_v2` (Firebase App Distribution).
-Both build, upload, upload dSYMs to Crashlytics, bump the version, and push a git tag.
+Helper methods called from the lanes of your project's Fastfile (the generator creates them):
+
+| Helper | Project lane | What it does |
+|---|---|---|
+| `iq_build` | `build` | Builds for the simulator, fails on warnings (warnings inside Swift packages are ignored) |
+| `iq_test` | `test` | Build (0 warnings), unit tests with coverage (`coverage/cobertura.xml`), UI tests with junit report (`fastlane/test_output_ui/report.junit`) |
+| `iq_beta` | `beta` | Builds and uploads to TestFlight, uploads dSYMs, bumps the version, pushes a git tag |
+| `iq_firebase_v2` | `firebase` | Same, for Firebase App Distribution (AdHoc) |
+
+`scripts/build.sh` is just a wrapper: no `INTENT` runs `fastlane build`, `INTENT=test` runs `fastlane test`, `firebase`/`appstore` run the distribution lanes.
+Tunable with env vars: `RUNTIME`, `DEVICE`, `MAX_WARNINGS` (default 0), `DO_NOT_DELETE_SIMULATOR`. When `BUILD_NUMBER` is set (Jenkins) a dedicated throw-away simulator is created per job.
+UI tests are reported but don't fail the lane by default (`fail_on_ui_test_failure: true` in the `test` lane to change it); UI tests are skipped when the project has no UI test target.
+The UI test junit report needs `xchtmlreport` (`brew install xctesthtmlreport`, installed by `setup.sh`).
 
 ## Versioning
 
@@ -95,6 +106,5 @@ Run them with `bundle exec ruby ../xcode-scripts/samples/<script>`.
 ## Roadmap
 
 - GitHub Actions and Jenkins templates calling the same lanes
-- Build/test logic moved into shared lanes, `build.sh` as a thin wrapper
 - Replace `xcode-install` with `xcodes`; replace `slather`/`xchtmlreport` with native coverage and result bundle tooling
 - Non-interactive generator (env vars), `doctor` check script, rename `beta` lane to `testflight`
