@@ -171,7 +171,7 @@ BUILD_SH=$(cat <<"EOF"
 #   (no INTENT)        fastlane build     builds the app, 0 warnings allowed
 #   INTENT=test        fastlane test      build + unit tests + coverage + UI tests   (--no-concurrent: sequential UI tests)
 #   INTENT=firebase    fastlane firebase  sends a test version to Firebase App Distribution
-#   INTENT=appstore    fastlane beta      sends a version to TestFlight
+#   INTENT=testflight  fastlane ship_testflight  sends a version to TestFlight (INTENT=appstore is the old name)
 # Optional env: XCODE_EXTRA_PATH (Xcode at /Applications/Xcode$XCODE_EXTRA_PATH.app), RUNTIME, DEVICE, MAX_WARNINGS
 
 export LC_ALL=en_US.UTF-8
@@ -196,7 +196,7 @@ export DEVELOPER_DIR="$XCODE_PATH/Contents/Developer/"
 echo "[BUILD.SH] Using xcode at $XCODE_PATH. (Use XCODE_EXTRA_PATH to change it)"
 
 echo "[BUILD.SH] Checking input parameters"
-if [ "$INTENT" == "appstore" ] || [ "$INTENT" == "firebase" ]; then
+if [ "$INTENT" == "testflight" ] || [ "$INTENT" == "appstore" ] || [ "$INTENT" == "firebase" ]; then
   if [[ "$MATCH_PASSPHRASE" == "" ]]; then
     echo "[BUILD.SH] Missing MATCH_PASSPHRASE env variable, configure jenkins bindings / github secrets or please use:"
     echo "[BUILD.SH] export MATCH_PASSPHRASE=XXX"
@@ -210,10 +210,10 @@ bundle --version | grep "$BUNDLER_VERSION_MIN_GREP" || exit 1
 ruby --version | grep "$RUBY_VERSION" || exit 1
 gem env | grep "RUBY VERSION: $RUBY_VERSION" || exit 1
 
-if [[ "$INTENT" == "appstore" ]]; then
+if [[ "$INTENT" == "testflight" || "$INTENT" == "appstore" ]]; then
 
-  echo "[BUILD.SH] Uploading to appstore using fastlane"
-  bundle exec fastlane beta
+  echo "[BUILD.SH] Uploading to TestFlight using fastlane"
+  bundle exec fastlane ship_testflight
 
 elif [[ "$INTENT" == "firebase" ]]; then
 
@@ -309,15 +309,16 @@ platform :ios do
                   testers_cs: "")
   end
 
-  desc "Submit a new Beta Build to Apple Apple TestFlight"
+  desc "Submit a new Build to Apple TestFlight"
   desc "This will also make sure the profile is up to date"
-  lane :beta do
-    iq_beta(appname: "###",
-            schemename: "###",
-            targetname: "###",
-            configuration: "Release",
-            xcprojname: "###",
-            bundleid: "###.###.###")
+  # Not called "testflight": fastlane already has an action with that name
+  lane :ship_testflight do
+    iq_testflight(appname: "###",
+                  schemename: "###",
+                  targetname: "###",
+                  configuration: "Release",
+                  xcprojname: "###",
+                  bundleid: "###.###.###")
   end
 end
 

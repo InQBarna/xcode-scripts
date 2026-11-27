@@ -24,10 +24,10 @@ Helper methods called from the lanes of your project's Fastfile (the generator c
 |---|---|---|
 | `iq_build` | `build` | Builds for the simulator, fails on warnings (warnings inside Swift packages are ignored) |
 | `iq_test` | `test` | Build (0 warnings), unit tests with coverage (`coverage/cobertura.xml`), UI tests with junit report (`fastlane/test_output_ui/report.junit`) |
-| `iq_beta` | `beta` | Builds and uploads to TestFlight, uploads dSYMs, bumps the version, pushes a git tag |
+| `iq_testflight` | `ship_testflight` | Builds and uploads to TestFlight, uploads dSYMs, bumps the version, pushes a git tag |
 | `iq_firebase_v2` | `firebase` | Same, for Firebase App Distribution (AdHoc) |
 
-`scripts/build.sh` is just a wrapper: no `INTENT` runs `fastlane build`, `INTENT=test` runs `fastlane test`, `firebase`/`appstore` run the distribution lanes.
+`scripts/build.sh` is just a wrapper: no `INTENT` runs `fastlane build`, `INTENT=test` runs `fastlane test`, `firebase`/`testflight` run the distribution lanes.
 Tunable with env vars: `RUNTIME`, `DEVICE`, `MAX_WARNINGS` (default 0), `DO_NOT_DELETE_SIMULATOR`. When `BUILD_NUMBER` is set (Jenkins) a dedicated throw-away simulator is created per job.
 UI tests are reported but don't fail the lane by default (`fail_on_ui_test_failure: true` in the `test` lane to change it); UI tests are skipped when the project has no UI test target.
 Results are written even when tests fail (the lane fails at the end): junit with fastlane's `trainer`, coverage converted from the xcresult with `xccov` to `coverage/cobertura.xml` (Swift packages and test targets excluded; `coverage_ignore: [...]` in the `test` lane adds more). No extra gems or brew packages are needed.
@@ -77,7 +77,7 @@ Templates live in `templates/` and call the same lanes you run locally, so CI an
 | File created | What it does |
 |---|---|
 | `.github/workflows/ci.yml` | On every PR and push to main: `fastlane test`, uploads coverage and junit results as artifacts |
-| `.github/workflows/distribute.yml` | Manual run (Actions tab): sends a build to Firebase or TestFlight with `fastlane firebase` / `beta` |
+| `.github/workflows/distribute.yml` | Manual run (Actions tab): sends a build to Firebase or TestFlight with `fastlane firebase` / `ship_testflight` |
 | `Jenkinsfile` | `Setup` + `Build / test` (publishes junit and cobertura) + `Distribute`, chosen with the `INTENT` parameter |
 
 Secrets for distribution (GitHub repository secrets / Jenkins credentials):
@@ -97,7 +97,7 @@ The generated Fastfile calls `iq_asc_api_key` in `before_all`, which uses those 
   `bundle exec ruby ../xcode-scripts/samples/read_devices_from_developer_portal.rb` (needs username/password credentials, not API keys).
 - Create the profiles: `bundle exec fastlane update_devices_and_profiles`
 - (Optional) Unset "Automatically manage signing" and select the new profiles for each configuration.
-- Ship: `bundle exec fastlane beta`
+- Ship: `bundle exec fastlane ship_testflight`
 
 ## Firebase App Distribution (optional)
 
@@ -130,4 +130,4 @@ The generator creates `.xcode-version` with your current Xcode. `scripts/build.s
 
 ## Roadmap
 
-- Non-interactive generator (env vars), `doctor` check script, rename `beta` lane to `testflight`
+- Non-interactive generator (env vars), `doctor` check script

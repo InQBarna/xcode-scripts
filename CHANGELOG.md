@@ -16,6 +16,7 @@ Breaking: generated projects are now SPM-only, and the repo moved to GitHub.
 - New `iq_asc_api_key` helper: App Store Connect key from `ASC_KEY_ID` / `ASC_ISSUER_ID` / `ASC_KEY_P8` env vars (CI secrets) or a key file. The generated Fastfile only configures it for lanes other than `build` / `test`.
 - `slather` and `xchtmlreport` removed. `iq_test` reads the xcresult with fastlane's `trainer` (junit) and `xccov` (coverage, converted to `coverage/cobertura.xml` by `iq_cobertura_from_xcresult`). Results are now written even when tests fail. The Gemfile only has `fastlane` and `xcodeproj`.
 - `xcinstall/install.sh` rewritten on top of `xcodes` (`xcode-install` / `xcversion` are deprecated, `xcinstall/Gemfile` removed). `.xcode-version` (created by the generator) selects the Xcode in `build.sh` and the GitHub Actions workflow.
+- TestFlight: helper renamed `iq_beta` -> `iq_testflight` and generated lane `beta` -> `ship_testflight` (a lane called `testflight` clashes with fastlane's action of the same name). `iq_beta` stays as a deprecated alias that warns, so existing `lane :beta` keep working. `INTENT=testflight` in `build.sh` / Jenkinsfile (`INTENT=appstore` still accepted by `build.sh`). Git tags stay `appstore/v...`.
 - `setup_match.sh`: fixed inverted check that tried to re-import the common Fastfile when already present.
 
 ## 1.x

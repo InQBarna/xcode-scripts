@@ -15,8 +15,8 @@ pipeline {
     }
 
     parameters {
-        choice(name: 'INTENT', choices: ['test', 'build', 'firebase', 'appstore'],
-               description: 'test: build + tests, build: build only, firebase: test version to Firebase, appstore: TestFlight')
+        choice(name: 'INTENT', choices: ['test', 'build', 'firebase', 'testflight'],
+               description: 'test: build + tests, build: build only, firebase: test version to Firebase, testflight: TestFlight')
     }
 
     stages {
@@ -39,7 +39,7 @@ pipeline {
         }
 
         stage('Distribute') {
-            when { expression { params.INTENT in ['firebase', 'appstore'] } }
+            when { expression { params.INTENT in ['firebase', 'testflight'] } }
             steps {
                 withCredentials([string(credentialsId: 'match-passphrase', variable: 'MATCH_PASSPHRASE'),
                                  file(credentialsId: 'asc-api-key-p8', variable: 'ASC_KEY_FILE')]) {
