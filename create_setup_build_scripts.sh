@@ -109,7 +109,10 @@ EOF
 echo "$SETUP_SH" > scripts/setup.sh
 chmod +x scripts/setup.sh
 echo "[CREATE_SETUP_BUILD_SCRIPTS.SH] Running setup script"
-scripts/setup.sh
+scripts/setup.sh || exit 1
+# setup.sh ran in its own shell: activate rbenv here too, so the `bundle exec` calls below use the project's Ruby
+export PATH="$(brew --prefix)/bin:$PATH"
+eval "$(rbenv init - bash)"
 
 # build script
 echo "[CREATE_SETUP_BUILD_SCRIPTS.SH] Setting up/configuring build script with:"

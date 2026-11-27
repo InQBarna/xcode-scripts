@@ -22,6 +22,10 @@ if [[ ! -d fastlane && ! -f Gemfile ]] && ! ls -d ./*.xcodeproj > /dev/null 2>&1
     exit 1
 fi
 
+# Use the project's Ruby even when this shell has not initialised rbenv
+export PATH="$(brew --prefix 2>/dev/null || echo /opt/homebrew)/bin:$PATH"
+command -v rbenv > /dev/null && eval "$(rbenv init - bash)"
+
 # --- Xcode and simulators ----------------------------------------------------------------------
 section "Xcode"
 if xcodebuild -version > /dev/null 2>&1; then
