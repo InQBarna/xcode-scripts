@@ -1,4 +1,12 @@
-#! /bin/bash
+#!/bin/bash
+# Generates scripts/setup.sh, scripts/build.sh and a fastlane setup for a new (SPM-only) iOS project.
+# Run it from the root of the project repository (where the .xcodeproj lives).
+
+# Where helper scripts are fetched from. Override to test a branch/tag: XCODE_SCRIPTS_REF=my-branch
+XCODE_SCRIPTS_REF="${XCODE_SCRIPTS_REF:-master}"
+XCODE_SCRIPTS_RAW="https://raw.githubusercontent.com/InQBarna/xcode-scripts/$XCODE_SCRIPTS_REF"
+# Major version of CommonFastfile that generated Fastfiles will follow ("~> 2.0")
+XCODE_SCRIPTS_MAJOR="2"
 
 # Version methods
 version_less_than_or_equal() {
@@ -8,13 +16,12 @@ version_less_than() {
     [ "$1" == "$2" ] && return 1 || version_less_than_or_equal $1 $2
 }
 
-# Writing Gemfile with cocoapods and fastlane
-echo "[CREATE_SETUP_BUILD_SCRIPTS.SH] Creating Gemfile with fastlane, cocoapods, xcodeproj and slather (for coverage)"
+# Writing Gemfile with fastlane
+echo "[CREATE_SETUP_BUILD_SCRIPTS.SH] Creating Gemfile with fastlane, xcodeproj and slather (for coverage)"
 GEMFILE=$(cat <<"EOF"
 source "https://rubygems.org"
 
 gem 'fastlane'
-gem 'cocoapods'
 gem 'xcodeproj'
 gem 'slather'
 
@@ -27,11 +34,11 @@ echo "$GEMFILE" > Gemfile
 # Pre-checks
 USER_BUNDLER_VERSION=`bundle --version | sed -e "s/.*\([0-9]\.[0-9]*\.[0-9]*\).*/\1/"`
 BUNDLER_VERSION=$USER_BUNDLER_VERSION
-version_less_than "$USER_BUNDLER_VERSION" "2.2.21" && BUNDLER_VERSION="2.2.21"
+version_less_than "$USER_BUNDLER_VERSION" "2.5.0" && BUNDLER_VERSION="2.5.0"
 
 # Configure ruby (rbenv) GEMS
-RUBY_VERSION="2.7.2"
-MIN_GEM_VERSION="3.2.20"
+RUBY_VERSION="3.3.7"
+MIN_GEM_VERSION="3.5.0"
 echo "[CREATE_SETUP_BUILD_SCRIPTS.SH] Setting up/configuring setup script with:"
 echo " RUBY_VERSION      \"$RUBY_VERSION\" (rbenv)"
 echo " MIN_GEM_VERSION   \"$MIN_GEM_VERSION\""
@@ -40,7 +47,7 @@ if [[ ! -d scripts ]]; then
     mkdir scripts
 fi
 SETUP_SH=$(cat <<"EOF"
-#!/bin/sh
+#!/bin/bash
 export LC_ALL=en_US.UTF-8
 export LANG=en_US.UTF-8
 
@@ -58,19 +65,17 @@ if [[ `which brew` == "" ]]; then
     echo "[SETUP.SH]  Please install it using: "
     echo "[SETUP.SH]   /bin/bash -c \"\$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/master/install.sh)\""
     echo "[SETUP.SH]  Or follow instructions at https://brew.sh"
-    exit -1
+    exit 1
 fi
 
-echo "[SETUP.SH] Installing / checking xchtmlreport"
-which xchtmlreport || brew install https://raw.githubusercontent.com/TitouanVanBelle/XCTestHTMLReport/develop/xchtmlreport.rb
-xchtmlreport -v | grep " 2\." || brew upgrade https://raw.githubusercontent.com/TitouanVanBelle/XCTestHTMLReport/develop/xchtmlreport.rb
-which xchtmlreport || echo "[SETUP.SH] WARNING: Could not install xchtmlreport"
+echo "[SETUP.SH] Installing / checking xchtmlreport (optional, only used to build the UI tests junit report)"
+which xchtmlreport || brew install xctesthtmlreport 2>/dev/null || echo "[SETUP.SH] WARNING: Could not install xchtmlreport, UI test reports won't be generated"
 
 echo "[SETUP.SH] Checking / installing ruby + gem + bundler"
 export RUBY_VERSION=""
 export BUNDLER_VERSION=""
 export MIN_GEM_VERSION=""
-export PATH=/usr/local/bin/:$PATH
+export PATH="$(brew --prefix)/bin:$PATH"
 if [[ `which rbenv` == "" ]]; then
     echo "[SETUP.SH] Installing rbenv"
     brew install rbenv
@@ -83,15 +88,15 @@ fi
 which gem | grep ".rbenv" || eval "$(rbenv init -)"
 rbenv versions | grep "$RUBY_VERSION" || rbenv install $RUBY_VERSION
 rbenv local $RUBY_VERSION
-ruby --version | grep "$RUBY_VERSION" || exit -1
-gem env | grep "RUBY VERSION: $RUBY_VERSION" || exit -1
+ruby --version | grep "$RUBY_VERSION" || exit 1
+gem env | grep "RUBY VERSION: $RUBY_VERSION" || exit 1
 if [[ `bundle --version | grep "$BUNDLER_VERSION"` == "" ]]; then
     echo "Y" | gem uninstall -a bundler
     gem install --user-install bundler:$BUNDLER_VERSION
 fi
 if [[ `bundle --version | grep "$BUNDLER_VERSION"` == "" ]]; then
   echo "[SETUP.SH] Could not install bundler version \"$BUNDLER_VERSION\""
-  exit -1
+  exit 1
 fi
 bundle install
 #bundle clean
@@ -103,41 +108,20 @@ sed -i "" -e "s/^export RUBY_VERSION=\"\"$/export RUBY_VERSION=\"$RUBY_VERSION\"
 sed -i "" -e "s/^export BUNDLER_VERSION=\"\"$/export BUNDLER_VERSION=\"$BUNDLER_VERSION\"/g" scripts/setup.sh
 sed -i "" -e "s/^export MIN_GEM_VERSION=\"\"$/export MIN_GEM_VERSION=\"$MIN_GEM_VERSION\"/g" scripts/setup.sh
 chmod +x scripts/setup.sh
-echo "[CREATE_SETUP_BUILD_SCRIPTS.SH] Running setup script without pod install"
+echo "[CREATE_SETUP_BUILD_SCRIPTS.SH] Running setup script"
 scripts/setup.sh
 
-# pod install added later to setup script...
-echo "
-echo \"[SETUP.SH] Runnig pod install\"
-bundle exec pod install || bundle exec pod install --repo-update || exit -1
-" >> scripts/setup.sh
-
-
 # build script
-WORKSPACE_NAME=`find . -iname *.xcworkspace | grep -v ".xcodeproj/" | head -n 1 | sed -e "s/\.\///g" | sed -e "s/\.xcworkspace//g"`
-PODFILE=`find . -iname Podfile | head -n 1`
-if [[ $WORKSPACE_NAME == "" && $PODFILE == "" ]]; then
-  echo "[CREATE_SETUP_BUILD_SCRIPTS.SH] Could not find workspace file, will generate one by setting up pods"
-  bundle exec pod init
-  bundle exec pod install
-fi
-WORKSPACE_NAME=`find . -iname *.xcworkspace | head -n 1 | sed -e "s/\.\///g" | sed -e "s/\.xcworkspace//g"`
-if [[ $WORKSPACE_NAME == "" ]]; then
-  echo "[CREATE_SETUP_BUILD_SCRIPTS.SH] Could not find workspace file, build script won't be generated"
-  exit -1
-fi
-
 echo "[CREATE_SETUP_BUILD_SCRIPTS.SH] Setting up/configuring build script with:"
 echo " RUBY_VERSION      \"$RUBY_VERSION\" (rbenv)"
 echo " MIN_GEM_VERSION   \"$MIN_GEM_VERSION\""
 echo " BuNDLER_VERSION   \"$BUNDLER_VERSION\""
-echo " WORKSPACE_NAME    \"$WORKSPACE_NAME\""
 PROJECT_NAME=`find . -iname *.xcodeproj | head -n 1 | sed -e "s/\.\///g" | sed -e "s/\.xcodeproj//g"`
 if [[ $PROJECT_NAME == "" ]]; then
   echo "[CREATE_SETUP_BUILD_SCRIPTS.SH] Could not find workspace file, build script won't be generated"
-  exit -1
+  exit 1
 fi
-SCHEME_FILE=`find $WORKSPACE_NAME.xcworkspace -iname *.xcscheme | grep "xcshareddata/xcschemes" | head -n 1`
+SCHEME_FILE=`find "$PROJECT_NAME.xcodeproj" -iname "*.xcscheme" | grep "xcshareddata/xcschemes" | head -n 1`
 if [[ "$SCHEME_FILE" != "" ]]; then
   SCHEME=`echo $SCHEME_FILE | sed -e "s/.*[/]\([^/]*\)\.xcscheme/\1/g"` 
 else
@@ -149,14 +133,14 @@ fi
 if [[ "$SCHEME" == "" ]]; then
   echo "[CREATE_SETUP_BUILD_SCRIPTS.SH] Error: Could not find a valid scheme"
   echo "[CREATE_SETUP_BUILD_SCRIPTS.SH] Build script won't be generated"
-  exit -1
+  exit 1
 fi
 echo " SCHEME            \"$SCHEME\""
 MAIN_TARGET=`xcodebuild -project $PROJECT_NAME.xcodeproj -list 2>/dev/null | sed -n '/Targets/,/^$/p' | grep -v "Tests" | grep -v "^$" | grep -v "Targets:" | sed -e "s/^[ ]*//g" | head -n 1`
 if [[ "$MAIN_TARGET" == "" ]]; then
   echo "[CREATE_SETUP_BUILD_SCRIPTS.SH] Could not find main app target"
   echo "[CREATE_SETUP_BUILD_SCRIPTS.SH] Build script won't be generated"
-  exit -1
+  exit 1
 fi
 echo " MAIN_TARGET       \"$MAIN_TARGET\""
 TEST_TARGET=`xcodebuild -project $PROJECT_NAME.xcodeproj -list 2>/dev/null | sed -n '/Targets/,/^$/p' | grep "[^U][^I]Tests" | sed -e "s/ *\([a-zA-Z ]*\)/\1/g" | head -n 1`
@@ -176,8 +160,8 @@ else
   echo " UI_TEST_TARGET    \"$UI_TEST_TARGET\""
 fi
 if [[ "$SCHEME_FILE" == "" ]]; then
-  echo "[CREATE_SETUP_BUILD_SCRIPTS.SH] Warning: There's no shared scheme on your workspace, for others to be able to build the same project you need a shared scheme in the workspace"
-  echo "[CREATE_SETUP_BUILD_SCRIPTS.SH] You may have schemes set up on your project, please avoid this. Schemes should be added to workspace!!"
+  echo "[CREATE_SETUP_BUILD_SCRIPTS.SH] Warning: There's no shared scheme in your project, for others (and CI) to be able to build it you need a shared scheme (Product > Scheme > Manage Schemes > Shared)"
+  echo "[CREATE_SETUP_BUILD_SCRIPTS.SH] Make sure the shared scheme is committed (xcshareddata/xcschemes)"
 else
   if [[ `git status $SCHEME_FILE | grep Untracked | wc -l` -gt 0 ]]; then
     echo "[CREATE_SETUP_BUILD_SCRIPTS.SH] Warning: The file $SCHEME_FILE should be added to the version control system"
@@ -185,22 +169,29 @@ else
 fi
 
 BUILD_SH=$(cat <<"EOF"
-#!/bin/sh
+#!/bin/bash
 
 export LC_ALL=en_US.UTF-8
 export LANG=en_US.UTF-8
 export RUBY_VERSION=""
 export BUNDLER_VERSION_MIN_GREP=" 2\."
-export PATH=/usr/local/bin/:$PATH
+export PATH="$(brew --prefix 2>/dev/null || echo /opt/homebrew)/bin:$PATH"
 if [ "$XCODE_EXTRA_PATH" == "" ]; then
     export XCODE_EXTRA_PATH=""
 fi
 export XCODE_PATH="/Applications/Xcode$XCODE_EXTRA_PATH.app/"
 export DEVELOPER_DIR="$XCODE_PATH/Contents/Developer/"
+# Simulator: defaults to the newest installed iOS runtime and an iPhone. Override with RUNTIME="18.2" DEVICE="iPhone 16"
 if [ "$RUNTIME" == "" ]; then
-    export RUNTIME="15.2"
+    export RUNTIME=`xcrun simctl list runtimes available | grep -E "^iOS [0-9.]+ " | sed -E "s/^iOS ([0-9.]+) .*/\1/" | sort -V | tail -n 1`
+    if [ "$RUNTIME" == "" ]; then
+        echo "[BUILD.SH] No iOS simulator runtime found, install one from Xcode > Settings > Components"
+        exit 1
+    fi
 fi
-export DEVICE="iPhone 11"
+if [ "$DEVICE" == "" ]; then
+    export DEVICE=`xcrun simctl list devicetypes | grep -E "iPhone [0-9]+ \(" | sed -E "s/ \(com.*//" | sort -V | tail -n 1`
+fi
 echo "[BUILD.SH] Using xcode at $XCODE_PATH. (Use XCODE_EXTRA_PATH to change it)"
 
 echo "[BUILD.SH] Checking input parameters"
@@ -208,16 +199,16 @@ if [ "$INTENT" == "appstore" ] || [ "$INTENT" == "firebase" ]; then
   if [[ "$MATCH_PASSPHRASE" == "" ]]; then
     echo "[BUILD.SH] Missing MATCH_PASSPHRASE env variable, configure jenkins bindings or please use:"
     echo "[BUILD.SH] export MATCH_PASSPHRASE=XXX"
-    exit -1
+    exit 1
   fi
 fi
 
 echo "[BUILD.SH] Configuring ruby and checking bundler version"
 which gem | grep ".rbenv" || eval "$(rbenv init -)"
-bundle --version | grep "$BUNDLER_VERSION_MIN_GREP" || exit -1
-ruby --version | grep "$RUBY_VERSION" || exit -1
-gem env | grep "RUBY VERSION: $RUBY_VERSION" || exit -1
-bundle --version | grep "$BUNDLER_VERSION_MIN_GREP" || exit -1
+bundle --version | grep "$BUNDLER_VERSION_MIN_GREP" || exit 1
+ruby --version | grep "$RUBY_VERSION" || exit 1
+gem env | grep "RUBY VERSION: $RUBY_VERSION" || exit 1
+bundle --version | grep "$BUNDLER_VERSION_MIN_GREP" || exit 1
 
 if [[ $INTENT == "appstore" ]]; then
 
@@ -254,7 +245,6 @@ elif [[ $INTENT == "firebase" ]]; then
 
 else
 
-  WORKSPACE_NAME=""
   PROJECT_NAME=""
   SCHEME=""
   TEST_TARGET=""
@@ -289,13 +279,13 @@ else
       if [[ "$RUNTIME_TYPE" == "" ]]; then
         echo "[BUILD.SH] Could not find installed runtime $RUNTIME. Aborting"
         echo "[BUILD.SH] run \"xcrun simctl list\" and double check $RUNTIME is NOT available"
-        exit -1
+        exit 1
       fi
       DEVICE_TYPE=`xcrun simctl list | sed -n '/== Device Types ==/,/== /p' | grep "$DEVICE (" | sed -e "s/$DEVICE [(]\([^)]*\).*/\1/"`
       if [[ "$DEVICE_TYPE" == "" ]]; then
         echo "[BUILD.SH] Could not find device type $DEVICE. Aborting"
         echo "[BUILD.SH] run \"xcrun simctl list\" and double check $DEVICE is NOT available"
-        exit -1
+        exit 1
       fi
       echo "[BUILD.SH] Creating device $simulatorName ($DEVICE_TYPE) with runtime $RUNTIME ($RUNTIME_TYPE)"
       xcrun simctl create "$simulatorName" "$DEVICE_TYPE" "$RUNTIME_TYPE"
@@ -303,7 +293,7 @@ else
       simulatorUUID=`xcrun simctl list | sed -n "/-- iOS $RUNTIME --/,/-- /p" | grep "$simulatorName (" | sed -e "s/$simulatorName [(]\([^)]*\).*/\1/"`
       if [[ "$simulatorUUID" == "" ]]; then 
         echo "[BUILD.SH] Failed to create $simulatorName, aborting"
-        exit -1
+        exit 1
       fi
     else
       echo "[BUILD.SH] Found $simulatorName, resetting  state and removing previous data"
@@ -325,11 +315,11 @@ else
     # 
     echo "[BUILD.SH] [`date +"%H:%M:%S"`] Building app for testing"
     cleanBuildDirectory
-    bundle exec fastlane gym --workspace "./$WORKSPACE_NAME.xcworkspace" --scheme "$SCHEME" --skip_archive --configuration Debug --destination="platform=iOS Simulator,name=$simulatorName,OS=$RUNTIME" --skip_package_ipa true --buildlog_path gymbuildlog --xcargs "clean build-for-testing" --derived_data_path="$DERIVEDDATA"
+    bundle exec fastlane gym --project "./$PROJECT_NAME.xcodeproj" --scheme "$SCHEME" --skip_archive --configuration Debug --destination="platform=iOS Simulator,name=$simulatorName,OS=$RUNTIME" --skip_package_ipa true --buildlog_path gymbuildlog --xcargs "clean build-for-testing" --derived_data_path="$DERIVEDDATA"
     if [ $? -ne 0 ]; then
       removeCreatedSimulator
       cleanBuildDirectory
-      exit -1
+      exit 1
     fi
 
     #
@@ -344,7 +334,7 @@ else
       echo $WARNINGS
       removeCreatedSimulator
       cleanBuildDirectory
-      exit -1
+      exit 1
     fi
     echo "Nice,$NUM_WARNINGS warnings"
 
@@ -356,10 +346,10 @@ else
     if [ $? -ne 0 ]; then
       removeCreatedSimulator
       cleanBuildDirectory
-      exit -1
+      exit 1
     fi
     echo "[BUILD.SH] [`date +"%H:%M:%S"`] Building code coverage result"
-    bundle exec slather coverage --cobertura-xml --output-directory coverage --ignore "Pods/*" --ignore "*/SourcePackages/*" --build-directory="$DERIVEDDATA" --scheme "$SCHEME" --workspace "$WORKSPACE_NAME.xcworkspace" "$PROJECT_NAME.xcodeproj"
+    bundle exec slather coverage --cobertura-xml --output-directory coverage --ignore "*/SourcePackages/*" --build-directory="$DERIVEDDATA" --scheme "$SCHEME" --workspace "$WORKSPACE_NAME.xcworkspace" "$PROJECT_NAME.xcodeproj"
 
     #
     # Run ui tests
@@ -397,10 +387,10 @@ else
     echo "[BUILD.SH] [`date +"%H:%M:%S"`] Building app for testing"
     simulatorName="$DEVICE"
     cleanBuildDirectory
-    bundle exec fastlane gym --workspace "./$WORKSPACE_NAME.xcworkspace" --scheme "$SCHEME" --skip_archive --configuration Debug --destination="platform=iOS Simulator,name=$simulatorName,OS=$RUNTIME" --skip_package_ipa true --buildlog_path gymbuildlog --xcargs "clean" --derived_data_path="$DERIVEDDATA"
+    bundle exec fastlane gym --project "./$PROJECT_NAME.xcodeproj" --scheme "$SCHEME" --skip_archive --configuration Debug --destination="platform=iOS Simulator,name=$simulatorName,OS=$RUNTIME" --skip_package_ipa true --buildlog_path gymbuildlog --xcargs "clean" --derived_data_path="$DERIVEDDATA"
     if [ $? -ne 0 ]; then
       cleanBuildDirectory
-      exit -1
+      exit 1
     fi
 
     #
@@ -414,7 +404,7 @@ else
       echo "There are $NUM_WARNINGS warnings, invalid build (max allowed warnings $MAX_WARNINGS"
       echo $WARNINGS
       cleanBuildDirectory
-      exit -1
+      exit 1
     fi
 
     echo "Nice,$NUM_WARNINGS warnings"
@@ -434,7 +424,6 @@ EOF
 
 echo "$BUILD_SH" > scripts/build.sh
 sed -i "" -e "s/^export RUBY_VERSION=\"\"$/export RUBY_VERSION=\"$RUBY_VERSION\"/g" scripts/build.sh
-sed -i "" -e "s/^  WORKSPACE_NAME=\"\"$/  WORKSPACE_NAME=\"$WORKSPACE_NAME\"/g" scripts/build.sh
 sed -i "" -e "s/^  PROJECT_NAME=\"\"$/  PROJECT_NAME=\"$PROJECT_NAME\"/g" scripts/build.sh
 sed -i "" -e "s/^  SCHEME=\"\"$/  SCHEME=\"$SCHEME\"/g" scripts/build.sh
 sed -i "" -e "s/^  TEST_TARGET=\"\"$/  TEST_TARGET=\"$TEST_TARGET\"/g" scripts/build.sh
@@ -446,8 +435,9 @@ chmod +x scripts/build.sh
 
 FASTFILE=$(cat <<"EOF"
 
-import_from_git(url: 'http://gitlab.inqbarna.com/contrib/xcode-scripts.git',
-               path: 'fastlane/CommonFastfile')
+import_from_git(url: 'https://github.com/InQBarna/xcode-scripts.git',
+               path: 'fastlane/CommonFastfile',
+               version: '~> __MAJOR__.0')
 
 default_platform(:ios)
 
@@ -509,6 +499,7 @@ if [ ! -d fastlane ]; then
   echo " PRODUCT_NAME      \"$PRODUCT_NAME\""
   mkdir fastlane
   echo "$FASTFILE" > fastlane/Fastfile
+  sed -i "" -e "s/__MAJOR__/$XCODE_SCRIPTS_MAJOR/g" fastlane/Fastfile
   sed -i "" -e "s/appname: \"###\"/appname: \"$PRODUCT_NAME\"/g" fastlane/Fastfile
   sed -i "" -e "s/schemename: \"###\"/schemename: \"$SCHEME\"/g" fastlane/Fastfile
   sed -i "" -e "s/targetname: \"###\"/targetname: \"$MAIN_TARGET\"/g" fastlane/Fastfile
@@ -521,7 +512,7 @@ fi
 
 if [ ! -f fastlane/Matchfile ]; then
   echo "[CREATE_SETUP_BUILD_SCRIPTS.SH] Switching to setup_match.sh"
-  curl -fsSL http://gitlab.inqbarna.com/contrib/xcode-scripts/-/raw/master/samples/setup_match.sh > /tmp/setup_match.sh
+  curl -fsSL $XCODE_SCRIPTS_RAW/samples/setup_match.sh > /tmp/setup_match.sh
   chmod +x /tmp/setup_match.sh
   /tmp/setup_match.sh
 fi
@@ -529,7 +520,7 @@ fi
 FOUND_SCRIPT=`grep "BUILD NUMBER FROM FASTLANE TO PLIST" "$PROJECT_NAME.xcodeproj/project.pbxproj"`
 if [[ $FOUND_SCRIPT == "" ]]; then
   echo "[CREATE_SETUP_BUILD_SCRIPTS.SH] Switching to add_bundleversion_build_phase.rb"
-  curl -fsSL http://gitlab.inqbarna.com/contrib/xcode-scripts/-/raw/master/samples/add_bundleversion_build_phase.rb > /tmp/add_bundleversion_build_phase.rb
+  curl -fsSL $XCODE_SCRIPTS_RAW/samples/add_bundleversion_build_phase.rb > /tmp/add_bundleversion_build_phase.rb
   chmod +x /tmp/add_bundleversion_build_phase.rb
   bundle exec ruby /tmp/add_bundleversion_build_phase.rb
 else
@@ -539,5 +530,4 @@ fi
 echo "[CREATE_SETUP_BUILD_SCRIPTS.SH] Settting up gitignore"
 curl "https://www.toptal.com/developers/gitignore/api/xcode,swift,macos,swiftpackagemanager,swiftpm" > .gitignore
 sed -i "" -e "/^\*\.xcodeproj$/d" .gitignore
-echo "Pods" >> .gitignore
 echo "fastlane/README.md" >> .gitignore

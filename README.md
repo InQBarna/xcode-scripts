@@ -1,90 +1,100 @@
-# Goals
+# xcode-scripts
 
-We want to start a fresh project ready for CICD, which means
+Common tooling to start a **new iOS project ready for CI/CD** (Swift Package Manager only).
+It generates the scripts and fastlane setup so every project builds, tests and ships the same way.
 
-    - Easily build te project in any (CICD)  machine (with some minimum requirements). And guarantee 0 warnings!
-    - Easily run the tests and guarante they pass. And report coverage!
-    - Easily send a test version to stakeholders
-    - Easily send a vertion to AppStoreConnect for a new release
+## What you get
 
-## How to set up a new project
+- `scripts/setup.sh`: installs what a machine needs (rbenv, Ruby, bundler, gems). Idempotent.
+- `scripts/build.sh`: builds the project with **0 warnings allowed**; with `INTENT=test` also runs unit/UI tests and reports coverage.
+- `fastlane/Fastfile` importing the shared lanes from this repo (`fastlane/CommonFastfile`), pinned to a major version.
+- Build number build phase (`YYYYMMddHHmm`), match setup, `.gitignore`.
 
-1. Grab the requirements:
-    - Have the repository created on github/your platform
+### Shared lanes (`fastlane/CommonFastfile`)
+
+| Lane | What it does |
+|---|---|
+| `update_devices_and_profiles` | Registers `fastlane/devices.txt` on the dev portal and regenerates development/adhoc/appstore profiles with match |
+| `install_profiles` | Installs existing profiles read-only (no dev portal access needed) |
+| `renew_certs` | Renews expired certificates and regenerates profiles. `dry_run:true` only lists what would be deleted |
+
+Helper methods used from your project's lanes: `iq_beta` (TestFlight) and `iq_firebase_v2` (Firebase App Distribution).
+Both build, upload, upload dSYMs to Crashlytics, bump the version, and push a git tag.
+
+## Versioning
+
+Generated Fastfiles import this repo with `version: '~> 2.0'`, so projects only receive compatible changes.
+Releases are git tags (`v2.x.y`); see [CHANGELOG.md](CHANGELOG.md). To pick up a new major version, bump the version in your Fastfile.
+
+## Set up a new project
+
+1. Grab the requirements (seriously, grab them first):
+    - Repository created on GitHub
     - App name
-    - Bundle identifier created on dev portal
-    - Apple team id (from dev portal)
+    - Bundle identifier created on the dev portal
+    - Apple team id
     - Match git repo url
-    - Firebase app id (from firebase, looks like:  1:XXXX:ios:XXXX)
-    - Auth p8 file (from dev portal)
-      - Key id
-      - Issuer id
-      - Auth p8 file (from dev portal)
-    - App created on appstoreconnect
+    - Firebase app id (looks like `1:XXXX:ios:XXXX`), if using Firebase distribution
+    - App Store Connect API key: key id, issuer id and the `.p8` file
+    - App created on App Store Connect
 
-2. Seriously... grab the requirements above or it will be harder to setup this later
+2. Clone your project repository and create the Xcode project at its root (iOS app, existing bundle id). Close Xcode.
 
-3. Clone your project repository
-
-4. Create the xcode project on the root of the repository.
-    - Create an iOS project
-    - Choose an existing bunddle id in dev portal
-    - Close it before moving to step 3.
-
-5. Run the scripts setup script by executing:
+3. From the project root, run the generator (it asks for some input, so use process substitution, not `curl | bash`):
 ```
-../xcode-scripts/create_setup_build_scripts.sh
+bash <(curl -fsSL https://raw.githubusercontent.com/InQBarna/xcode-scripts/master/create_setup_build_scripts.sh)
 ```
-    - Setup script should now be ready to be used, you can test it by executing: `./scripts/setup.sh`
-    - Build script is created at: `./scripts/build.sh`. This is not ready to be used yet.
-    - A build phase should now be added to the project to set the build number correctly with format: YYYYMMddHHmm.
-    - If no fastlane folder is found, Fastfile and Appfile will have been generated at fastlane/FastFile fastlane/Appfile, please check they're created correctly
-    -  MANUALLY: firebase id should be manually added to fastlane/Fastfile
-    -  MANUALLY: the p8 file (key id and issuer id) should be manually downloaded and configured at fastlane/Fastfile
-    -  MANUALLY: we recommend moving the scheme files to the workspace, and mark them as "shared", and deleting the file at \*.xcodeproj/project.xcworkspace
-    -  MANUALLY: in the scheme -> test: please mark "gather coverage" for 'all targets'
+   or, with this repo cloned next to your project: `../xcode-scripts/create_setup_build_scripts.sh`.
+   Use `XCODE_SCRIPTS_REF=<branch|tag>` to test another version of the helper scripts.
 
-At this point you should be able to run `./scripts/build.sh` correctly and it will build the project. It can also run the tests when setting the INTENT env variable like this: `export INTENT="test"`
+4. Finish the manual bits:
+    - Put the Firebase id in `fastlane/Fastfile`
+    - Download the `.p8` file to `fastlane/` and set key id and issuer id in `fastlane/Fastfile`
+    - Make sure the scheme is **shared** (Product > Scheme > Manage Schemes) and committed
+    - Scheme > Test: enable "Gather coverage" for **all targets**
 
-6. Appstore
-    - (OPTIONAL) MANUALLY write at least one device to `fastlane/devices.txt`, either MANUALLY or ... 
-      - If you have correct credentials for it (doesn't work with keys, plain username/password), you can download the devices registered by running: `bundle exec ruby ../xcode-scripts/samples/read_devices_from_developer_portal.rb"`
-    - Create the provisioning profiles using: `bundle exec fastlane update_devices_and_profiles`
-      - (OPTIONAL) MANUALLY unset "Automatically manage signing"
-      - (OPTIONAL) MANUALLY select the newly created prov profiles for every config
+5. Verify: `./scripts/setup.sh` and then `./scripts/build.sh` (`INTENT=test ./scripts/build.sh` to run tests).
 
-If you correctly commit all your work, now `bundle exec fastlane beta` should work ! (unless your project doesn't even compile :D )
+   Simulator defaults to the newest installed iOS runtime and iPhone; override with `RUNTIME=18.2 DEVICE="iPhone 16"`.
+   Xcode other than `/Applications/Xcode.app`: `XCODE_EXTRA_PATH=-16.2` (uses `/Applications/Xcode-16.2.app`).
 
-7. (Optional) Firebase
-    - `pod 'Firebase/Crashlytics'`
-    - Setup the project on firebase, following the steps from console.firebase.com: Pods, addition of GoogleServices to project, appdelegate setup...
-      - Right now adding firebase with SPM does not work correctly when uploading the debug symbols to crashlytics, please avoid SPM for firebase until solved
-    - Enable beta distribution on firebase website
-    - Setup beta distribution fastlane plugin on project running: `fastlane add_plugin firebase_app_distribution`
-    - Check the correct firebaseid on Fastfile (if not done in step 5)
-    - If you want to run the firebase distribution script locally, get sure you're logged in to firebase using `firebase login`
+## App Store / TestFlight
 
-If you correctly commit all your work, now `bundle exec fastlane firebase` should work ! (unless your project doesn't even compile :D )
+- (Optional) Write devices to `fastlane/devices.txt`, or download them with
+  `bundle exec ruby ../xcode-scripts/samples/read_devices_from_developer_portal.rb` (needs username/password credentials, not API keys).
+- Create the profiles: `bundle exec fastlane update_devices_and_profiles`
+- (Optional) Unset "Automatically manage signing" and select the new profiles for each configuration.
+- Ship: `bundle exec fastlane beta`
 
-8. (Optional) Configure desired pods
-    - Add Swiftlint to pods 
-      - `pod 'SwiftLint'`
-      - `pod 'SwiftFormat/CLI'` 
-    - And run `./scripts/setup.sh` when done
+## Firebase App Distribution (optional)
 
-9. (Optional) Other usual project setup
-    - Add adhoc config to the project copying the Release config: `bundle exec ruby ../xcode-scripts/samples/add_adhoc_config.rb`
-      - MANUALLY unset "Automatically manage signing"
-      - MANUALLY select the correct prov profiles for adhoc config
-      - MANUALLY change the configuration in Fastfile's iq_firebase_v2 to adhoc
-    - Add swiftlint build phase `bundle exec ruby ../xcode-scripts/samples/add_swiftlint_build_phase.rb`
-    - Or add SwiftFormat build phase: `bundle exec ruby ../xcode-scripts/samples/add_swiftformat_build_phase.rb`
+- Add Firebase with SPM following console.firebase.com (add `GoogleService-Info.plist`, etc.).
+  If Crashlytics symbol upload fails with SPM, set `UPLOAD_SYMBOLS_PATH` (see the commented example in `scripts/build.sh`).
+- Enable beta distribution on the Firebase website.
+- Add the plugin: `bundle exec fastlane add_plugin firebase_app_distribution`
+- Locally, be logged in with `firebase login`.
+- Ship: `bundle exec fastlane firebase`
 
-TODO for setup_gem.sh:
+## Other usual setup (`samples/`)
 
-    - Change name beta to "testflight"
-    - Grab firebase id from env variable
-    - Check current xcode version and target
-    - Check for firebase pods
-    - Check firebase plugin on fastlane
-    - Check coverage is added to target
+| Script | Purpose |
+|---|---|
+| `add_adhoc_config.rb` | Adds an AdHoc config copying Release (then select profiles and point `iq_firebase_v2` to `adhoc`) |
+| `add_appstore_config.rb` | Adds an AppStore config |
+| `add_swiftlint_build_phase.rb` / `add_swiftformat_build_phase.rb` | Adds the lint/format build phase |
+| `add_bundleversion_build_phase.rb` | Build number build phase (done by the generator) |
+| `add_settings_bundle.rb`, `add_fluent.rb` | Settings bundle / Fluent localization |
+| `read_devices_from_developer_portal.rb` | Downloads registered devices into `fastlane/devices.txt` |
+
+Run them with `bundle exec ruby ../xcode-scripts/samples/<script>`.
+
+## Xcode installation on CI machines
+
+`xcinstall/install.sh <version>` installs and selects an Xcode version (needs `XCODE_INSTALL_USER` / `XCODE_INSTALL_PASSWORD`).
+
+## Roadmap
+
+- GitHub Actions and Jenkins templates calling the same lanes
+- Build/test logic moved into shared lanes, `build.sh` as a thin wrapper
+- Replace `xcode-install` with `xcodes`; replace `slather`/`xchtmlreport` with native coverage and result bundle tooling
+- Non-interactive generator (env vars), `doctor` check script, rename `beta` lane to `testflight`

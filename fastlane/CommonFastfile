@@ -1,4 +1,4 @@
-fastlane_version "2.64.1"
+fastlane_version "2.220.0"
 
 default_platform :ios
 
@@ -92,7 +92,6 @@ def iq_firebase_v2(appname:, schemename:, targetname:, configuration:, xcprojnam
       export_method: 'ad-hoc',
       configuration: configuration,
       export_options: {
-        compileBitcode: false,
         provisioningProfiles: {
           bundleid => "match AdHoc " + bundleid
         }
