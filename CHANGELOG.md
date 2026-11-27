@@ -24,6 +24,7 @@ Breaking: generated projects are now SPM-only, and the repo moved to GitHub.
 - `.github/workflows/versions.yml` (weekly): smoke-tests the newest Ruby and opens a PR bumping `versions.env` when it passes, or an issue when it fails; `tests/check-actions.sh` reports outdated actions in the templates.
 - New lanes: `check_certs` (expiry report, `strict:true` for CI), `sync_devices` (devices.txt from the portal with the API key), `lint` (SwiftLint / SwiftFormat), and `bump_version` in the generated Fastfile (`iq_bump_version`). `tests/lanes.sh` tests them with stubs; `tests/smoke.sh` runs `bump_version` for real.
 - `setup.sh` installs the Ruby even when Homebrew's `ruby-build` is too old to know it (falls back to upstream `ruby-build` as an rbenv plugin); found by the first run on a fresh hosted runner.
+- `scripts/doctor.sh` warns when the locale is not UTF-8 (fastlane crashes with "invalid byte sequence in US-ASCII" when run directly; `build.sh` sets it itself). `tests/smoke.sh` now behaves like a developer shell (UTF-8, rbenv active) and is run locally in a clean environment (`env -i`) to catch assumptions about the machine.
 - `setup_match.sh`: fixed inverted check that tried to re-import the common Fastfile when already present.
 
 ## 1.x

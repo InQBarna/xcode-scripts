@@ -34,6 +34,11 @@ git init -q && git add -A && git -c user.name=smoke -c user.email=smoke@example.
 step "Running the generator"
 TEAM_ID=ABCDE12345 MATCH_GIT_URL=https://example.invalid/match.git CI_PROVIDER=both XCODE_SCRIPTS_USE_LOCAL=1 \
     "$REPO/create_setup_build_scripts.sh" > "$WORK/generator.log" 2>&1 || { tail -30 "$WORK/generator.log"; die "generator failed (log: $WORK/generator.log)"; }
+# Like a developer's shell: UTF-8 locale (fastlane needs it, scripts/build.sh sets it itself) and rbenv active,
+# so `bundle exec` below uses the project's Ruby
+export LC_ALL=en_US.UTF-8 LANG=en_US.UTF-8
+export PATH="$(brew --prefix)/bin:$PATH"
+eval "$(rbenv init - bash)"
 for f in Gemfile scripts/setup.sh scripts/build.sh fastlane/Fastfile fastlane/Appfile fastlane/Matchfile fastlane/devices.txt \
          .gitignore .xcode-version .ruby-version Jenkinsfile .github/workflows/ci.yml .github/workflows/distribute.yml .github/dependabot.yml scripts/doctor.sh; do
     check "generated $f" test -f "$f"

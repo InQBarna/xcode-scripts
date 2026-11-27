@@ -26,6 +26,12 @@ fi
 export PATH="$(brew --prefix 2>/dev/null || echo /opt/homebrew)/bin:$PATH"
 command -v rbenv > /dev/null && eval "$(rbenv init - bash)"
 
+# fastlane crashes ("invalid byte sequence in US-ASCII") without a UTF-8 locale
+case "${LC_ALL:-$LANG}" in
+    *UTF-8*|*utf8*|*UTF8*) ;;
+    *) warn "the locale is '${LC_ALL:-${LANG:-not set}}', fastlane needs UTF-8 when run directly" "export LC_ALL=en_US.UTF-8 LANG=en_US.UTF-8 (scripts/build.sh does it for you)" ;;
+esac
+
 # --- Xcode and simulators ----------------------------------------------------------------------
 section "Xcode"
 if xcodebuild -version > /dev/null 2>&1; then
