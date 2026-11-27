@@ -37,8 +37,28 @@ platform :ios do
   end
 
   desc "Renews expired certificates and regenerates the provisioning profiles (development, adhoc, appstore)"
+  desc "Deletes the existing match profiles of the Matchfile app identifiers first, so the new ones keep the exact names the project expects"
   desc "Run once a year when certificates expire. Needs write access to the match repo and dev portal access"
-  lane :renew_certs do
+  desc "Use dry_run:true to only list the profiles that would be deleted"
+  lane :renew_certs do |options|
+    require "match"
+
+    config = FastlaneCore::Configuration.create(Match::Options.available_options, {})
+    config.load_configuration_file("Matchfile")
+    identifiers = Array(config[:app_identifier])
+    UI.user_error!("No app_identifier found in Matchfile") if identifiers.empty?
+
+    # Without this, a profile that still holds the plain name makes match save the new one with a
+    # timestamp suffix, which the project does not reference.
+    Spaceship::ConnectAPI.token = Spaceship::ConnectAPI::Token.from(hash: lane_context[SharedValues::APP_STORE_CONNECT_API_KEY])
+    names = identifiers.flat_map { |id| %w[Development AdHoc AppStore].map { |type| /\Amatch #{type} #{Regexp.escape(id)}( \d+)?\z/ } }
+    stale = Spaceship::ConnectAPI::Profile.all.select { |profile| names.any? { |name| name.match?(profile.name.to_s) } }
+    stale.each do |profile|
+      UI.important("#{options[:dry_run] ? 'Would delete' : 'Deleting'} profile #{profile.name} (#{profile.id})")
+      profile.delete! unless options[:dry_run]
+    end
+    next if options[:dry_run]
+
     %w[development adhoc appstore].each do |type|
       match(type: type,
             renew_expired_certs: true,
